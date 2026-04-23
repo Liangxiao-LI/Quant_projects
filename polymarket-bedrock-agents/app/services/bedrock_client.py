@@ -24,10 +24,13 @@ class BedrockClient:
         if self._settings.aws_access_key_id and self._settings.aws_secret_access_key:
             session_kw["aws_access_key_id"] = self._settings.aws_access_key_id
             session_kw["aws_secret_access_key"] = self._settings.aws_secret_access_key
+        client_kw = dict(session_kw)
+        if self._settings.aws_bedrock_runtime_endpoint_url:
+            client_kw["endpoint_url"] = self._settings.aws_bedrock_runtime_endpoint_url
         self._client = boto3.client(
             "bedrock-runtime",
             config=Config(retries={"max_attempts": 5, "mode": "adaptive"}),
-            **session_kw,
+            **client_kw,
         )
 
     def invoke_reasoning(self, system: str, user: str, *, max_tokens: int = 2048) -> str:

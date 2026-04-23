@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
     aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
     aws_secret_access_key: str | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
+    #: Optional VPC interface endpoint or proxy URL for bedrock-runtime (see README).
+    aws_bedrock_runtime_endpoint_url: str | None = Field(
+        default=None,
+        alias="AWS_BEDROCK_RUNTIME_ENDPOINT_URL",
+    )
 
     bedrock_reasoning_model_id: str = Field(
         default="anthropic.claude-3-5-sonnet-20240620-v1:0",
