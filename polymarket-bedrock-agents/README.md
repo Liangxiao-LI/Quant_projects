@@ -59,7 +59,7 @@ FastAPI (routes)
 
 ## How to use (end-to-end)
 
-1. **Configure AWS + Bedrock** (IAM, model access, optional VPC endpoint) — see [AWS Bedrock setup](#aws-bedrock-setup-iam-models-vpc-endpoint--embedding).
+1. **Configure AWS + Bedrock** (IAM, models, optional VPC endpoint) — see [AWS step-by-step setup](#aws-step-by-step-setup-bedrock-iam-models-vpc-embeddings).
 2. **Run Postgres + API locally** — see [Run on your local machine](#run-on-your-local-machine).
 3. **Ingest** markets from Gamma (writes rows, embeddings, entities):
 
@@ -77,39 +77,163 @@ Open **interactive docs** after the server starts: [http://127.0.0.1:8000/docs](
 
 ---
 
-## AWS Bedrock setup (IAM, models, VPC endpoint, & embedding)
+## AWS step-by-step setup (Bedrock, IAM, models, VPC, embeddings)
 
-### 1. Region and model access
+Official reference (models + IAM + Marketplace): [Request access to models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).  
+Announcement on simplified / automatic serverless model access: [Amazon Bedrock simplifies access…](https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-bedrock-automatic-enablement-serverless-foundation-models/).
 
-1. In the [AWS console](https://console.aws.amazon.com/), open **Amazon Bedrock** in the region you will use (must match `AWS_REGION`, e.g. `us-east-1`).
-2. Open **Model access** (or **Bedrock → Cross-region inference / Marketplace** depending on console version) and **request access** to:
-   - A **chat / reasoning** model (e.g. Anthropic Claude 3.5 Sonnet), used for entity extraction and relationship classification.
-   - An **embedding** model (e.g. **Amazon Titan Text Embeddings v2**), used to vectorise market text for similarity and candidate search.
+### Important: the old “Model access” console page is retired
 
-Wait until access shows as **Available** before calling the API.
+AWS **retired the standalone Bedrock “Model access”** workflow in favour of:
 
-### 2. IAM permissions for local development
+- **Automatic enablement** of serverless foundation models (governed by **IAM** and, where applicable, **AWS Marketplace** subscription on first use).
+- **Anthropic models:** a **one-time “first time use” (FTU)** use-case submission per account or organization (console or `PutUseCaseForModelAccess` API).
+- **Many third-party models:** the **first successful invoke** can start a Marketplace subscription in the background (can take **up to ~15 minutes**; you may see transient errors until it completes).
 
-Create (or attach to your user/role) a policy that allows **Bedrock Runtime** invoke on your models, for example:
+You no longer wait for a single “Model access = Approved” toggle for most models; instead follow the steps below.
 
-- `bedrock:InvokeModel`
-- `bedrock:InvokeModelWithResponseStream` (optional, if you later stream)
+---
 
-Scope `resource` to the specific foundation model ARNs you enabled, or use the account-wide pattern your security team allows.
+### Part A — Pick a Region (must match the app)
 
-For local runs, common credential sources are:
+1. Sign in to the [AWS Management Console](https://console.aws.amazon.com/).
+2. In the **top navigation bar**, open the **Region** dropdown.
+3. Choose a **commercial** Region where Bedrock offers the models you want (this repo defaults to **`us-east-1`**).
+4. Write down the Region code (e.g. `us-east-1`). You will use the **same** value for `AWS_REGION` in `.env`.
 
-| Method | What to set |
-|--------|-------------|
-| Access keys | `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in `.env` (do not commit `.env`). |
-| AWS CLI profiles | `export AWS_PROFILE=my-profile` (leave key vars empty in `.env`). |
-| SSO | `aws sso login` then `AWS_PROFILE=...`. |
+---
 
-The app uses `boto3` and picks up the [default credential chain](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html).
+### Part B — Account prerequisites (billing & Marketplace)
 
-### 3. Wire reasoning + embedding model IDs into the app
+1. In the console, open **Billing and Cost Management** → **Payment methods**.
+2. Ensure the account has a **valid default payment method** (required for many Marketplace-backed model flows).
+3. (Optional but recommended) Open **AWS Marketplace** → **Your subscriptions** and confirm you can view subscriptions (helps debug `AccessDeniedException` during first model use).
 
-Copy `.env.example` to `.env` and set:
+---
+
+### Part C — Anthropic “first time use” (only if you use Claude in `BEDROCK_REASONING_MODEL_ID`)
+
+Skip this part if your reasoning model is **not** Anthropic.
+
+1. In the console, open **Amazon Bedrock** (same Region as above).
+2. Open **Model catalog** (or **Overview** → link to catalog, depending on console layout).
+3. Search for your Claude model (e.g. **Claude 3.5 Sonnet**).
+4. Open the model detail page and complete the **use case / first-time customer** form when prompted (wording varies; AWS documents this as **PutUseCaseForModelAccess** for API-driven flows).
+5. Submit the form once per **account** (or once at the **organization management account** for all member accounts, per AWS docs).
+
+---
+
+### Part D — “Turn on” models by using the catalog or playground (console)
+
+You do **not** rely on the retired Model access page. Instead:
+
+1. Open **Amazon Bedrock** in your chosen Region.
+2. Open **Model catalog**.
+3. Select your **embedding** model (e.g. **Amazon Titan Text Embeddings v2**) and open it in **Playground** (or invoke later via this app).  
+4. Select your **reasoning** model (e.g. **Claude 3.5 Sonnet**) and open **Playground** once if you want the console to walk through any remaining acceptance prompts.
+
+If an invoke fails with Marketplace or subscription errors, wait a few minutes and retry after IAM (next part) is correct.
+
+---
+
+### Part E — IAM: create a policy (Bedrock invoke + Marketplace subscription)
+
+This app calls **`bedrock-runtime`** (`InvokeModel`). For **Marketplace-listed** serverless models, AWS documents that the **first** auto-enablement often requires **`aws-marketplace:Subscribe`** (and related read actions) on the principal that performs the first subscription.
+
+#### Step E.1 — Open the IAM policy editor
+
+1. Open **IAM** in the console.
+2. In the left sidebar, click **Policies**.
+3. Click **Create policy**.
+4. Click the **JSON** tab (skip the visual “Add permissions” wizard for this template).
+
+#### Step E.2 — Paste a policy document
+
+Use **one** of the following.
+
+**Option 1 — Broad developer policy (simplest; least restrictive)**
+
+Replace `REGION` with your Region (e.g. `us-east-1`). Use only in sandboxes you control.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "MarketplaceSubscriptionsForBedrockModels",
+      "Effect": "Allow",
+      "Action": [
+        "aws-marketplace:Subscribe",
+        "aws-marketplace:Unsubscribe",
+        "aws-marketplace:ViewSubscriptions"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BedrockInvokeFoundationModels",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "arn:aws:bedrock:REGION::foundation-model/*"
+    }
+  ]
+}
+```
+
+**Option 2 — Tighter policy (recommended for teams)**
+
+- Keep `bedrock:InvokeModel` resources scoped to specific foundation model ARNs, for example:
+
+  `arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0`  
+  `arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0`
+
+- Optionally scope `aws-marketplace:Subscribe` with `aws-marketplace:ProductId` **condition keys** to specific product IDs (see AWS table in [model access guide](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)).
+
+#### Step E.3 — Name and create the policy
+
+1. Click **Next**.
+2. Under **Policy name**, enter something like `PolymarketBedrockAppPolicy`.
+3. Click **Create policy**.
+
+---
+
+### Part F — IAM: attach the policy to **your** developer identity
+
+Pick **one** path.
+
+#### Path F.A — Attach to an IAM **User** (common for laptops)
+
+1. Open **IAM** → **Users**.
+2. Click your username (or **Create user** if you are building a dedicated dev user).
+3. Open the **Permissions** tab.
+4. Click **Add permissions** → **Attach policies directly**.
+5. Search for `PolymarketBedrockAppPolicy`, select it, click **Next**, then **Add permissions**.
+
+#### Path F.B — Attach to an IAM **Role** (common for EC2/ECS/Lambda)
+
+1. Open **IAM** → **Roles** → select the role your workload assumes.
+2. **Add permissions** → **Attach policies** → attach `PolymarketBedrockAppPolicy`.
+
+---
+
+### Part G — Credentials on your laptop (choose one)
+
+| Goal | Steps |
+|------|--------|
+| **Access keys** | IAM → **Users** → your user → **Security credentials** → **Create access key** (type: CLI/local code). Put `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` into `.env`. **Never commit `.env`.** |
+| **AWS CLI profiles** | Install AWS CLI v2, run `aws configure --profile myprofile`, then export `AWS_PROFILE=myprofile` in the shell before `uvicorn`. You can leave the key fields blank in `.env`. |
+| **AWS SSO** | Configure SSO (`aws configure sso`), run `aws sso login`, export `AWS_PROFILE=...`. |
+
+This application uses **boto3** and the [default credential chain](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html).
+
+---
+
+### Part H — Map models and embedding size into `.env`
+
+1. Copy `.env.example` to `.env` (if you have not already).
+2. Set:
 
 ```env
 AWS_REGION=us-east-1
@@ -120,33 +244,49 @@ BEDROCK_REASONING_MODEL_ID=anthropic.claude-3-5-sonnet-20240620-v1:0
 # Embedding model (market text → vector stored in pgvector)
 BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 
-# Output width for Titan v2 (256 / 512 / 1024). Must match Postgres column size.
+# Titan v2 supports 256 / 512 / 1024 — must match Postgres vector column
 BEDROCK_EMBEDDING_DIMENSION=1024
 ```
 
-**Embedding model ↔ database:** `app/db/schema.sql` defines `market_embeddings.embedding` as `VECTOR(1024)`. If you switch to another model (e.g. different dimension):
+3. **Database alignment:** `app/db/schema.sql` uses `VECTOR(1024)`. If you change `BEDROCK_EMBEDDING_DIMENSION`, update the SQL column to the same size (or recreate the table).
 
-1. Change `BEDROCK_EMBEDDING_MODEL_ID` and `BEDROCK_EMBEDDING_DIMENSION` in `.env`.
-2. Alter or recreate the `market_embeddings` column to the same dimension (or apply a new migration).
+---
 
-The code pads or truncates vectors to `BEDROCK_EMBEDDING_DIMENSION` before insert so the **configured dimension** and **SQL vector size** must agree.
+### Part I — Optional VPC interface endpoint for `bedrock-runtime` (private networks)
 
-### 4. Optional: VPC interface endpoint (private AWS access)
+Use this when your app runs **inside a VPC** without a NAT path to the public Bedrock endpoint.
 
-If your workload runs inside a VPC without direct internet egress, create a **VPC interface endpoint** for **Bedrock Runtime**:
-
-1. **VPC → Endpoints → Create endpoint**.
-2. Service name: search for **`bedrock-runtime`** (format like `com.amazonaws.<region>.bedrock-runtime`).
-3. Choose subnets + security groups that allow your app (or bastion) to reach the endpoint on **HTTPS (443)**.
-4. **Private DNS** for the endpoint:
-   - **Enabled:** your app can keep using the normal regional hostname; you usually **do not** need `AWS_BEDROCK_RUNTIME_ENDPOINT_URL`.
-   - **Disabled:** AWS gives you a **VPC endpoint DNS name** (and often a private hosted zone). Set that URL in `.env`:
+1. Open **VPC** → **Endpoints** → **Create endpoint**.
+2. **Name tag:** e.g. `bedrock-runtime-endpoint`.
+3. **Service category:** **AWS services**.
+4. In the search box, type **`bedrock-runtime`** and select the service name shaped like **`com.amazonaws.<region>.bedrock-runtime`**.
+5. **VPC:** choose the VPC where your workload runs.
+6. **Subnets:** choose **one subnet per Availability Zone** you use (interface endpoints create ENIs per subnet).
+7. **Security group:** create or select a group that **allows inbound TCP 443** from your application instances/tasks (and **outbound** as required by your org). The ENIs for the endpoint use this SG.
+8. **Enable Private DNS name for this endpoint:**  
+   - **Enabled (typical):** the standard Bedrock Runtime hostname for the Region resolves privately; you can leave `AWS_BEDROCK_RUNTIME_ENDPOINT_URL` **empty** in `.env`.  
+   - **Disabled:** copy the **DNS name** shown for the endpoint and set:
 
      ```env
-     AWS_BEDROCK_RUNTIME_ENDPOINT_URL=https://<your-vpce-dns-name>
+     AWS_BEDROCK_RUNTIME_ENDPOINT_URL=https://<endpoint-dns-name-from-console>
      ```
 
-The application passes this value to `boto3.client("bedrock-runtime", endpoint_url=...)`. For **local laptop** development, most users use the **default public endpoint** and leave `AWS_BEDROCK_RUNTIME_ENDPOINT_URL` empty.
+9. Click **Create endpoint** and wait until the status is **Available**.
+
+For **local development on your home laptop**, you usually **skip** this part and use the public endpoint with an empty `AWS_BEDROCK_RUNTIME_ENDPOINT_URL`.
+
+---
+
+### Part J — Smoke-test Bedrock from your machine (optional)
+
+With AWS CLI v2 configured for the same account/region:
+
+```bash
+aws sts get-caller-identity
+aws bedrock list-foundation-models --region "$AWS_REGION" --query "modelSummaries[?contains(modelId, 'titan-embed')].modelId" --output table
+```
+
+If `AccessDeniedException` persists on first model calls, re-check **Part E** (Marketplace permissions), **Part C** (Anthropic FTU), and wait a few minutes for Marketplace subscription finalization.
 
 ---
 
@@ -247,6 +387,7 @@ curl -sS -X POST localhost:8000/query \
 
 ## Limitations
 
+- AWS console labels and flows change; if any step here diverges from what you see, follow the latest **[Amazon Bedrock User Guide](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html)** (especially [model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)).
 - Gamma / Data / CLOB paths may evolve; uncertain areas are isolated with **TODO** comments in clients.
 - `GET /prices-history` parameters are best-effort; confirm against current Polymarket docs.
 - Relationship LLM calls cost money; the detector only invokes Bedrock for **high composite-score** candidate pairs.
