@@ -2,13 +2,17 @@
 
 Production-oriented Python service that ingests **Polymarket** discovery data from the **Gamma API**, enriches it with **Amazon Bedrock** (embeddings + entity extraction + optional relationship reasoning), stores a **PostgreSQL + pgvector** graph, and exposes **FastAPI** endpoints to query related prediction markets.
 
+**Recommended workflow:** treat **events** as the primary unit — record **live event counts** in snapshots, persist **events only** (nested markets are summarised in JSON, not as rows in `markets`), then run **`EventRelationshipAgent`** to find links such as **temporal containment** or **scope containment** (e.g. parent event vs child). A legacy **market-level** ingest path remains for experiments.
+
 ## What it does
 
 - Discovers active events and markets via `https://gamma-api.polymarket.com`.
+- **Event mode:** `POST /events/live-snapshot` stores **only `events`** + a row in **`event_count_snapshots`** (event count + total nested markets seen in Gamma); market titles/ids are embedded in `events.payload` for analysis **without** writing the `markets` table.
+- **Event–event links:** `POST /events/relationships/detect` embeds events and runs **`EventRelationshipAgent`** (rules + optional Bedrock) into **`event_relationships`** (e.g. containment, overlap, same topic).
 - Optionally reads live microstructure from `https://clob.polymarket.com` (public endpoints only; **no trading**).
 - Optionally wraps `https://data-api.polymarket.com` for analytics (MVP stubs with TODOs).
-- Detects relationships (shared entities/tags, series/event grouping, embeddings, optional LLM refinement, optional price correlation hook).
-- Answers REST queries such as `/markets/{id}/related` and `/markets/search`.
+- **Market mode (legacy):** market-level relationships, entities, and `/markets/...` APIs.
+- Answers REST queries: `/events/...`, `/markets/...`, `/markets/search`, `/query`.
 
 ## Architecture (text diagram)
 
@@ -25,12 +29,14 @@ FastAPI (routes)
    ├─► EntityExtractionAgent ─────────► BedrockClient (LLM JSON)
    ├─► EmbeddingService ──────────────► BedrockClient (vectors)
    │
-   ├─► RelationshipDetectionAgent ────► rules + cosine + optional Bedrock classify
+   ├─► RelationshipDetectionAgent ────► rules + cosine + optional Bedrock (market pairs)
+   │
+   ├─► EventRelationshipAgent ───────► rules + event embeddings + optional Bedrock (event pairs)
    │
    ├─► LivePriceAgent ────────────────► PolymarketClobClient
    ├─► MarketAnalyticsAgent ──────────► PolymarketDataClient (optional)
    │
-   └─► GraphStorageAgent ─────────────► PostgreSQL (+ optional Neo4j hook later)
+   └─► GraphStorageAgent ─────────────► PostgreSQL (events, snapshots, event_edges, markets optional)
 ```
 
 > **Bedrock Agents vs Runtime:** this MVP orchestrates agents in Python (clear boundaries, easy tests). You can later register the same tools with the **Bedrock Agents** control plane; the clients and scoring logic carry over unchanged.
@@ -44,8 +50,9 @@ FastAPI (routes)
 | **LivePriceAgent** | Parallel CLOB reads (`/price`, `/midpoint`, `/spread`, `/book`). |
 | **MarketAnalyticsAgent** | Data API façade (TODOs on exact paths). |
 | **EntityExtractionAgent** | Bedrock LLM → structured `Entity` JSON. |
-| **RelationshipDetectionAgent** | Bucketed candidate generation + weighted score + optional LLM for high-score pairs only. |
-| **GraphStorageAgent** | Upserts SQL rows for markets, embeddings, entities, relationships. |
+| **RelationshipDetectionAgent** | Bucketed candidate generation + weighted score + optional LLM for **market** pairs. |
+| **EventRelationshipAgent** | **Event–event** candidates (tags, series, dates, nested market text, embeddings) + optional LLM (containment / overlap / topic). |
+| **GraphStorageAgent** | Upserts events, optional markets, embeddings, entity rows, **event snapshots**, **event_relationships**, market **relationships**. |
 | **QueryAnsweringAgent** | Reads stored edges + text search for evidence-first responses. |
 
 ## Prerequisites
@@ -60,18 +67,10 @@ FastAPI (routes)
 ## How to use (end-to-end)
 
 1. **Configure AWS + Bedrock** (IAM, models, optional VPC endpoint) — see [AWS step-by-step setup](#aws-step-by-step-setup-bedrock-iam-models-vpc-embeddings).
-2. **Run Postgres + API locally** — see [Run on your local machine](#run-on-your-local-machine).
-3. **Ingest** markets from Gamma (writes rows, embeddings, entities):
-
-   `POST /ingest/active-markets` with JSON body (see [API workflow](#api-workflow)).
-
-4. **Detect relationships** (reads DB, may call Bedrock for high-score pairs):
-
-   `POST /relationships/detect`.
-
-5. **Query** stored related markets or search by keyword:
-
-   `GET /markets/{market_id}/related`, `GET /markets/search?q=...`, or `POST /query`.
+2. **Run Postgres + API locally** — see [Run on your local machine](#run-on-your-local-machine).  
+   If the database was created **before** the event-layer tables existed, apply **`app/db/migrations/002_event_focus.sql`** once (or re-init from the latest `app/db/schema.sql`).
+3. **Event-centric (recommended):** snapshot live Gamma events → detect **event–event** links → query related events — see [API workflow](#api-workflow).
+4. **Market-centric (legacy):** `POST /ingest/active-markets` (writes **every** market row) → `POST /relationships/detect` → `GET /markets/{id}/related`.
 
 Open **interactive docs** after the server starts: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
 
@@ -306,9 +305,13 @@ cp .env.example .env
 docker compose up -d db
 ```
 
-Wait until the container is healthy. The first start applies `app/db/schema.sql` (includes `CREATE EXTENSION vector`).
+Wait until the container is healthy. The first start applies `app/db/schema.sql` (includes `CREATE EXTENSION vector`, **event snapshots**, **event embeddings**, and **event_relationships**).
 
 If you use your own Postgres, create database `polymarket_agents`, enable `pgvector`, and run the SQL in `app/db/schema.sql` manually.
+
+**Upgrading an older volume:** if tables `event_count_snapshots` / `event_embeddings` / `event_relationships` are missing, run:
+
+`psql "$DATABASE_URL" -f app/db/migrations/002_event_focus.sql`
 
 ### 3. Python virtual environment and dependencies
 
@@ -334,7 +337,7 @@ curl -sS http://127.0.0.1:8000/health
 
 ### 6. Run the full pipeline (example)
 
-See [API workflow](#api-workflow) for `curl` examples. Typical order: **ingest** → **relationships/detect** → **markets/.../related**.
+See [API workflow](#api-workflow). Typical **event** order: **`/events/live-snapshot`** → **`/events/relationships/detect`** → **`/events/{id}/related`**. Typical **market** order: **ingest** → **relationships/detect** → **markets/.../related**.
 
 ### Optional: run API + DB in Docker
 
@@ -349,15 +352,53 @@ The `api` service listens on port **8000**. Your machine still needs valid AWS c
 
 ## API workflow
 
-1. **Ingest** active markets (Gamma → Postgres + embeddings + entities):
+### A — Event-centric (no `markets` rows; snapshots + event–event links)
+
+1. **Live snapshot** — pull active events from Gamma, upsert **`events` only**, record counts in **`event_count_snapshots`** (nested markets are summarised in `events.payload`, not inserted into `markets`):
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/events/live-snapshot \
+  -H 'Content-Type: application/json' \
+  -d '{"max_pages": 2}'
+```
+
+Response includes `event_count`, `markets_in_gamma` (total markets seen under those events), `snapshot_id`, and `captured_at`.
+
+2. **List recent snapshots** (audit trail of “how many events existed at capture time”):
+
+```bash
+curl -sS 'http://127.0.0.1:8000/events/snapshots?limit=10'
+```
+
+3. **Detect event–event relationships** — Titan embeddings per event, then **`EventRelationshipAgent`** (rules + optional Bedrock). Replaces rows in **`event_relationships`**:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/events/relationships/detect \
+  -H 'Content-Type: application/json' \
+  -d '{"max_events": 800, "max_pairs": 4000, "use_llm": true}'
+```
+
+4. **Query events related to a given event**
+
+```bash
+curl -sS 'http://127.0.0.1:8000/events/<EVENT_ID>/related'
+```
+
+Relationship types include **`EVENT_A_CONTAINS_B`** (directed: container → contained, using dates and/or nested market question coverage), **`EVENT_TEMPORAL_OVERLAP`**, **`EVENT_SAME_TOPIC`**, **`EVENT_NEAR_DUPLICATE`**, etc. (see `app/models/event_link.py`).
+
+---
+
+### B — Market-centric (legacy: full market rows + market graph)
+
+1. **Ingest** active markets (Gamma → Postgres **events + every market row** + embeddings + entities):
 
 ```bash
 curl -sS -X POST localhost:8000/ingest/active-markets \
   -H 'Content-Type: application/json' \
-  -d '{"max_markets": 80, "run_relationships": false}'
+  -d '{"max_pages": 1, "max_markets": 80, "run_relationships": false}'
 ```
 
-2. **Detect relationships** (uses stored embeddings/entities; replaces `relationships` table):
+2. **Detect market–market relationships** (replaces `relationships` table):
 
 ```bash
 curl -sS -X POST localhost:8000/relationships/detect \
@@ -387,6 +428,8 @@ curl -sS -X POST localhost:8000/query \
 
 ## Limitations
 
+- **Event “containment”** is approximated (dates, tag/series overlap, nested market **question text** in payload, embeddings, LLM). It is not a formal proof of set inclusion on Polymarket’s internal IDs.
+- The **`markets`** table and market-level graph remain for **legacy** workflows; **event mode** does not require populating `markets`.
 - AWS console labels and flows change; if any step here diverges from what you see, follow the latest **[Amazon Bedrock User Guide](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html)** (especially [model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)).
 - Gamma / Data / CLOB paths may evolve; uncertain areas are isolated with **TODO** comments in clients.
 - `GET /prices-history` parameters are best-effort; confirm against current Polymarket docs.
@@ -397,6 +440,7 @@ curl -sS -X POST localhost:8000/query \
 ## Future improvements
 
 - Wire **Amazon Bedrock Agents** with action groups pointing to these FastAPI tools.
+- Richer **event** ontology (strict partial orders, official Polymarket series/slug joins) and UI for snapshot diffs.
 - Version 2: deeper **CLOB** integration (historical series alignment for `PRICE_CORRELATED`).
 - Version 3: **Data API** holder / flow / OI features for behavioural relationship signals.
 - Incremental ingestion schedules (EventBridge + Lambda) and idempotent checkpoints.

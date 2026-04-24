@@ -64,6 +64,20 @@ class Event(BaseModel):
     def _default_markets(cls, v: Any) -> Any:
         return v if v is not None else []
 
+    def embedding_text(self) -> str:
+        """Text used for event-level embeddings (title, description, tags, nested market questions)."""
+        parts = [self.title or "", self.description or "", " ".join(self.tags)]
+        g = (self.raw or {}).get("gamma_market_summary") or {}
+        qs = g.get("market_questions") or []
+        if isinstance(qs, list):
+            parts.append(" | ".join(str(q) for q in qs[:50]))
+        return "\n".join(p for p in parts if p).strip()
+
+    def market_questions_from_payload(self) -> list[str]:
+        g = (self.raw or {}).get("gamma_market_summary") or {}
+        qs = g.get("market_questions")
+        return [str(q) for q in qs] if isinstance(qs, list) else []
+
 
 class MarketPrice(BaseModel):
     """Live or historical price snapshot from CLOB."""

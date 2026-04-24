@@ -12,6 +12,21 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _text_from_converse_response(response: dict[str, Any]) -> str:
+    """Flatten Bedrock Converse `output.message.content` text blocks (skip reasoning)."""
+    msg = response.get("output", {}).get("message", {})
+    parts: list[str] = []
+    for block in msg.get("content", []):
+        if not isinstance(block, dict):
+            continue
+        if block.get("reasoningContent"):
+            continue
+        t = block.get("text")
+        if isinstance(t, str) and t:
+            parts.append(t)
+    return "\n".join(parts).strip()
+
+
 class BedrockClient:
     """
     Invokes foundation models on Amazon Bedrock.
@@ -36,6 +51,21 @@ class BedrockClient:
     def invoke_reasoning(self, system: str, user: str, *, max_tokens: int = 2048) -> str:
         model_id = self._settings.bedrock_reasoning_model_id
         mt = min(max(max_tokens, 1), 8192)
+        if "deepseek" in model_id.lower():
+            # DeepSeek V3.x on Bedrock expects Converse-style `messages` (not legacy `prompt` InvokeModel).
+            # See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
+            conv = self._client.converse(
+                modelId=model_id,
+                system=[{"text": system.strip()}],
+                messages=[{"role": "user", "content": [{"text": user.strip()}]}],
+                inferenceConfig={
+                    "maxTokens": mt,
+                    "temperature": 0.2,
+                    "topP": 0.9,
+                },
+            )
+            return _text_from_converse_response(conv)
+
         if model_id.startswith("anthropic."):
             body: dict[str, Any] = {
                 "anthropic_version": "bedrock-2023-05-31",
@@ -43,23 +73,8 @@ class BedrockClient:
                 "system": system,
                 "messages": [{"role": "user", "content": user}],
             }
-        elif "deepseek" in model_id.lower():
-            # Amazon Bedrock DeepSeek: InvokeModel text completion shape.
-            # See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
-            # If your account uses a cross-Region inference profile, set model_id to that profile ID
-            # (e.g. us.deepseek.r1-v1:0) instead of the catalog model id.
-            prompt = (
-                f"[System instructions — follow exactly]\n{system.strip()}\n\n"
-                f"[User]\n{user.strip()}\n\n[Assistant — JSON or text as requested above]\n"
-            )
-            body = {
-                "prompt": prompt,
-                "max_tokens": mt,
-                "temperature": 0.2,
-                "top_p": 0.9,
-            }
         else:
-            # Converse-style / other providers: TODO extend for amazon.nova-* etc.
+            # TODO: amazon.nova-* etc. — extend when needed
             body = {
                 "messages": [
                     {"role": "system", "content": [{"text": system}]},
@@ -78,12 +93,6 @@ class BedrockClient:
             parts = payload.get("content") or []
             texts = [p.get("text", "") for p in parts if isinstance(p, dict)]
             return "\n".join(texts).strip()
-        if "deepseek" in model_id.lower():
-            choices = payload.get("choices") or []
-            if choices and isinstance(choices[0], dict):
-                return str(choices[0].get("text", "")).strip()
-            logger.warning("deepseek_empty_choices payload_keys=%s", list(payload.keys()))
-            return ""
         output = payload.get("output", {}).get("message", {}).get("content", [])
         texts = [c.get("text", "") for c in output if isinstance(c, dict)]
         return "\n".join(texts).strip()

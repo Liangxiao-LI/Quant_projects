@@ -17,6 +17,9 @@ class MarketRepository:
         self._session = session
 
     async def upsert_event(self, event: Event) -> None:
+        payload = {**(event.raw or {})}
+        if event.tags:
+            payload["tags"] = event.tags
         await self._session.execute(
             text(
                 """
@@ -47,7 +50,7 @@ class MarketRepository:
                 "closed": event.closed,
                 "start_date": event.start_date,
                 "end_date": event.end_date,
-                "payload": json.dumps(event.raw),
+                "payload": json.dumps(payload),
             },
         )
 
