@@ -50,7 +50,7 @@ class MarketRepository:
                 "closed": event.closed,
                 "start_date": event.start_date,
                 "end_date": event.end_date,
-                "payload": json.dumps(payload),
+                "payload": json.dumps(payload, default=str),
             },
         )
 

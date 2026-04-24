@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any, Sequence
 
 from sqlalchemy import text
@@ -21,6 +22,27 @@ def _parse_payload(val: Any) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+def _event_from_row(row: Mapping[str, Any]) -> Event:
+    raw = _parse_payload(row["payload"])
+    tags = raw.get("tags")
+    if not isinstance(tags, list):
+        tags = []
+    return Event(
+        id=row["id"],
+        slug=row["slug"],
+        title=row["title"] or "",
+        description=row["description"],
+        tags=[str(t) for t in tags],
+        series_id=row["series_id"],
+        active=row["active"],
+        closed=row["closed"],
+        start_date=row["start_date"],
+        end_date=row["end_date"],
+        markets=[],
+        raw=raw,
+    )
 
 
 class EventRepository:
@@ -71,29 +93,22 @@ class EventRepository:
             ),
             {"lim": limit},
         )
-        out: list[Event] = []
-        for row in res.mappings().all():
-            raw = _parse_payload(row["payload"])
-            tags = raw.get("tags")
-            if not isinstance(tags, list):
-                tags = []
-            out.append(
-                Event(
-                    id=row["id"],
-                    slug=row["slug"],
-                    title=row["title"] or "",
-                    description=row["description"],
-                    tags=[str(t) for t in tags],
-                    series_id=row["series_id"],
-                    active=row["active"],
-                    closed=row["closed"],
-                    start_date=row["start_date"],
-                    end_date=row["end_date"],
-                    markets=[],
-                    raw=raw,
-                )
-            )
-        return out
+        return [_event_from_row(row) for row in res.mappings().all()]
+
+    async def get_event(self, event_id: str) -> Event | None:
+        res = await self._session.execute(
+            text(
+                """
+                SELECT id, slug, title, description, series_id, active, closed,
+                       start_date, end_date, payload
+                FROM events
+                WHERE id = :id
+                """
+            ),
+            {"id": event_id},
+        )
+        row = res.mappings().first()
+        return _event_from_row(row) if row else None
 
     async def upsert_event_embedding(self, event_id: str, vector: Sequence[float]) -> None:
         literal = "[" + ",".join(str(float(x)) for x in vector) + "]"

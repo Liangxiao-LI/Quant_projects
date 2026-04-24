@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from datetime import datetime, timezone
@@ -164,14 +165,27 @@ async def events_live_snapshot(
 
     markets_in_gamma = sum(len(ev.markets) for ev in events)
     graph = GraphStorageAgent(session)
-    await graph.save_events_metadata_only(events)
+    try:
+        await graph.save_events_metadata_only(events)
 
-    ev_repo = EventRepository(session)
-    snap_id = await ev_repo.insert_snapshot(
-        event_count=len(events),
-        markets_in_gamma=markets_in_gamma,
-        source="gamma",
-    )
+        ev_repo = EventRepository(session)
+        snap_id = await ev_repo.insert_snapshot(
+            event_count=len(events),
+            markets_in_gamma=markets_in_gamma,
+            source="gamma",
+        )
+    except ProgrammingError as e:
+        logger.exception("events_live_snapshot_db_schema")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Database schema is missing event-focused tables or columns. "
+                "Apply migration from repo root: "
+                "python -m app.db.apply_migration app/db/migrations/002_event_focus.sql "
+                "(or: psql with postgresql://… URL, not postgresql+asyncpg://, -f that file)"
+            ),
+        ) from e
+
     return {
         "event_count": len(events),
         "markets_in_gamma": markets_in_gamma,
@@ -188,6 +202,59 @@ async def list_event_snapshots(
 ) -> dict[str, Any]:
     rows = await EventRepository(session).list_snapshots(limit=limit)
     return {"snapshots": rows}
+
+
+@router.get("/events")
+async def list_stored_events(
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(50, ge=1, le=5000),
+) -> dict[str, Any]:
+    """Browse rows in `events` (lightweight; full JSON payload via GET /events/{id})."""
+    events = await EventRepository(session).list_events(limit=limit)
+    items: list[dict[str, Any]] = []
+    for ev in events:
+        g = (ev.raw or {}).get("gamma_market_summary") or {}
+        mc = g.get("market_count") if isinstance(g.get("market_count"), int) else 0
+        items.append(
+            {
+                "id": ev.id,
+                "title": ev.title,
+                "slug": ev.slug,
+                "active": ev.active,
+                "closed": ev.closed,
+                "tags": ev.tags,
+                "markets_in_event": mc,
+            }
+        )
+    return {"count": len(items), "events": items}
+
+
+@router.get("/events/{event_id}")
+async def get_stored_event(
+    event_id: str,
+    session: AsyncSession = Depends(get_session),
+    include_raw: bool = Query(False, description="Include full events.payload (can be large)"),
+) -> dict[str, Any]:
+    ev = await EventRepository(session).get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    g = (ev.raw or {}).get("gamma_market_summary") or {}
+    out: dict[str, Any] = {
+        "id": ev.id,
+        "title": ev.title,
+        "slug": ev.slug,
+        "description": ev.description,
+        "active": ev.active,
+        "closed": ev.closed,
+        "tags": ev.tags,
+        "series_id": ev.series_id,
+        "start_date": ev.start_date.isoformat() if ev.start_date else None,
+        "end_date": ev.end_date.isoformat() if ev.end_date else None,
+        "gamma_market_summary": g if g else None,
+    }
+    if include_raw:
+        out["payload"] = ev.raw
+    return out
 
 
 @router.post("/events/relationships/detect")
