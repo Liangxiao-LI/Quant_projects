@@ -35,12 +35,28 @@ class BedrockClient:
 
     def invoke_reasoning(self, system: str, user: str, *, max_tokens: int = 2048) -> str:
         model_id = self._settings.bedrock_reasoning_model_id
+        mt = min(max(max_tokens, 1), 8192)
         if model_id.startswith("anthropic."):
-            body = {
+            body: dict[str, Any] = {
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
+                "max_tokens": mt,
                 "system": system,
                 "messages": [{"role": "user", "content": user}],
+            }
+        elif "deepseek" in model_id.lower():
+            # Amazon Bedrock DeepSeek: InvokeModel text completion shape.
+            # See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
+            # If your account uses a cross-Region inference profile, set model_id to that profile ID
+            # (e.g. us.deepseek.r1-v1:0) instead of the catalog model id.
+            prompt = (
+                f"[System instructions — follow exactly]\n{system.strip()}\n\n"
+                f"[User]\n{user.strip()}\n\n[Assistant — JSON or text as requested above]\n"
+            )
+            body = {
+                "prompt": prompt,
+                "max_tokens": mt,
+                "temperature": 0.2,
+                "top_p": 0.9,
             }
         else:
             # Converse-style / other providers: TODO extend for amazon.nova-* etc.
@@ -49,7 +65,7 @@ class BedrockClient:
                     {"role": "system", "content": [{"text": system}]},
                     {"role": "user", "content": [{"text": user}]},
                 ],
-                "inferenceConfig": {"maxTokens": max_tokens},
+                "inferenceConfig": {"maxTokens": mt},
             }
         resp = self._client.invoke_model(
             modelId=model_id,
@@ -62,6 +78,12 @@ class BedrockClient:
             parts = payload.get("content") or []
             texts = [p.get("text", "") for p in parts if isinstance(p, dict)]
             return "\n".join(texts).strip()
+        if "deepseek" in model_id.lower():
+            choices = payload.get("choices") or []
+            if choices and isinstance(choices[0], dict):
+                return str(choices[0].get("text", "")).strip()
+            logger.warning("deepseek_empty_choices payload_keys=%s", list(payload.keys()))
+            return ""
         output = payload.get("output", {}).get("message", {}).get("content", [])
         texts = [c.get("text", "") for c in output if isinstance(c, dict)]
         return "\n".join(texts).strip()

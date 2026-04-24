@@ -78,12 +78,23 @@ async def ingest_active_markets(
     extractor = EntityExtractionAgent()
     embeddings: dict[str, list[float]] = {}
     entities: dict[str, list[Entity]] = {}
+    embed_failures: list[str] = []
+    entity_failures: list[str] = []
     for m in markets:
+        if not m.id:
+            continue
         try:
             embeddings[m.id] = embedder.embed(m.embedding_text())
+        except Exception as exc:  # noqa: BLE001
+            msg = f"{m.id}: {exc}"
+            embed_failures.append(msg)
+            logger.warning("embed_failed market_id=%s error=%s", m.id, exc)
+        try:
             entities[m.id] = extractor.extract_for_market(m)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("embed_entity_skip", extra={"market_id": m.id, "error": str(exc)})
+            msg = f"{m.id}: {exc}"
+            entity_failures.append(msg)
+            logger.warning("entity_failed market_id=%s error=%s", m.id, exc)
 
     await graph.save_embeddings(embeddings)
     await graph.save_entities(entities)
@@ -106,8 +117,13 @@ async def ingest_active_markets(
     return {
         "events": len(events),
         "markets_saved": saved,
+        "markets_embed_attempted": len(markets),
         "embeddings": len(embeddings),
         "entities_markets": len(entities),
+        "embedding_failures": len(embed_failures),
+        "entity_failures": len(entity_failures),
+        "first_embedding_error": embed_failures[0] if embed_failures else None,
+        "first_entity_error": entity_failures[0] if entity_failures else None,
         "relationships_saved": rel_count,
     }
 
