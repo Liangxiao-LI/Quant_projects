@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+from itertools import product
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -47,7 +49,8 @@ def generate_signals(
     df: pd.DataFrame,
     short_window: int = 20,
     long_window: int = 60,
-    transaction_cost_one_way: float = 0.0005,
+    fixed_cost_one_way: float = 0.0005,
+    market_impact_one_way: float = 0.0002,
 ) -> pd.DataFrame:
     """
     Generate indicators, positions, and return series.
@@ -85,9 +88,12 @@ def generate_signals(
     # This is a simple but practical turnover proxy for transaction costs.
     # 这是一个简单且实用的换手代理，用于估算交易成本。
     out["trade"] = out["lagged_signal"].diff().abs().fillna(out["lagged_signal"]).astype(int)
-    # Apply one-way transaction cost (e.g., 5 bps per trade).
-    # 应用单边交易成本（例如每次交易 5bps）。
-    out["strategy_return_tc"] = out["strategy_return"] - out["trade"] * transaction_cost_one_way
+    # More realistic cost model = fixed fee + half-spread slippage + market impact.
+    # 更真实的成本模型 = 固定费用 + 半价差滑点 + 市场冲击。
+    spread_ratio = ((out["ASK"] - out["BID"]).abs() / out["PRC"]).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    out["half_spread_one_way"] = 0.5 * spread_ratio
+    out["one_way_total_cost"] = fixed_cost_one_way + out["half_spread_one_way"] + market_impact_one_way
+    out["strategy_return_tc"] = out["strategy_return"] - out["trade"] * out["one_way_total_cost"]
 
     # Equity curve shows cumulative growth of $1 over time.
     # 净值曲线表示 1 美元初始资金随时间的累计增长。
@@ -163,13 +169,146 @@ def calculate_performance_metrics(
     }
 
 
+def run_single_strategy(
+    df: pd.DataFrame,
+    short_window: int,
+    long_window: int,
+    fixed_cost_one_way: float,
+    market_impact_one_way: float,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    result = generate_signals(
+        df=df,
+        short_window=short_window,
+        long_window=long_window,
+        fixed_cost_one_way=fixed_cost_one_way,
+        market_impact_one_way=market_impact_one_way,
+    )
+    metrics = calculate_performance_metrics(result["strategy_return_tc"], result["lagged_signal"])
+    return result, metrics
+
+
+def run_grid_search(
+    df: pd.DataFrame,
+    short_grid: list[int],
+    long_grid: list[int],
+    fixed_cost_one_way: float,
+    market_impact_one_way: float,
+    trade_penalty_lambda: float,
+    drawdown_penalty_lambda: float,
+) -> pd.DataFrame:
+    records: list[dict[str, float]] = []
+    sample_years = max(len(df) / 252.0, 1e-9)
+    for short_window, long_window in product(short_grid, long_grid):
+        if short_window >= long_window:
+            continue
+        _, metrics = run_single_strategy(
+            df=df,
+            short_window=short_window,
+            long_window=long_window,
+            fixed_cost_one_way=fixed_cost_one_way,
+            market_impact_one_way=market_impact_one_way,
+        )
+        trades_per_year = float(metrics["number_of_trades"]) / sample_years
+        max_drawdown_penalty = abs(min(float(metrics["max_drawdown"]), 0.0))
+        objective_score = (
+            float(metrics["sharpe_ratio"])
+            - trade_penalty_lambda * trades_per_year
+            - drawdown_penalty_lambda * max_drawdown_penalty
+        )
+        record: dict[str, float] = {"short_window": float(short_window), "long_window": float(long_window)}
+        record.update(metrics)
+        record["trades_per_year"] = trades_per_year
+        record["max_drawdown_penalty"] = max_drawdown_penalty
+        record["objective_score"] = objective_score
+        records.append(record)
+
+    grid_df = pd.DataFrame(records).sort_values("objective_score", ascending=False).reset_index(drop=True)
+    return grid_df
+
+
+def run_walk_forward_validation(
+    df: pd.DataFrame,
+    short_grid: list[int],
+    long_grid: list[int],
+    train_window: int,
+    test_window: int,
+    fixed_cost_one_way: float,
+    market_impact_one_way: float,
+    trade_penalty_lambda: float,
+    drawdown_penalty_lambda: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    oos_chunks: list[pd.DataFrame] = []
+    fold_rows: list[dict[str, float]] = []
+    start = 0
+    fold_id = 0
+
+    while start + train_window + test_window <= len(df):
+        train_df = df.iloc[start : start + train_window].copy()
+        test_df = df.iloc[start + train_window : start + train_window + test_window].copy()
+
+        grid_train = run_grid_search(
+            df=train_df,
+            short_grid=short_grid,
+            long_grid=long_grid,
+            fixed_cost_one_way=fixed_cost_one_way,
+            market_impact_one_way=market_impact_one_way,
+            trade_penalty_lambda=trade_penalty_lambda,
+            drawdown_penalty_lambda=drawdown_penalty_lambda,
+        )
+        if grid_train.empty:
+            break
+
+        best_row = grid_train.iloc[0]
+        best_short = int(best_row["short_window"])
+        best_long = int(best_row["long_window"])
+
+        test_result, test_metrics = run_single_strategy(
+            df=test_df,
+            short_window=best_short,
+            long_window=best_long,
+            fixed_cost_one_way=fixed_cost_one_way,
+            market_impact_one_way=market_impact_one_way,
+        )
+        test_result["fold_id"] = fold_id
+        test_result["selected_short"] = best_short
+        test_result["selected_long"] = best_long
+        oos_chunks.append(test_result)
+
+        fold_rows.append(
+            {
+                "fold_id": float(fold_id),
+                "train_start": train_df["date"].iloc[0].strftime("%Y-%m-%d"),
+                "train_end": train_df["date"].iloc[-1].strftime("%Y-%m-%d"),
+                "test_start": test_df["date"].iloc[0].strftime("%Y-%m-%d"),
+                "test_end": test_df["date"].iloc[-1].strftime("%Y-%m-%d"),
+                "selected_short": float(best_short),
+                "selected_long": float(best_long),
+                "oos_sharpe": float(test_metrics["sharpe_ratio"]),
+                "oos_annualized_return": float(test_metrics["annualized_return"]),
+                "oos_max_drawdown": float(test_metrics["max_drawdown"]),
+            }
+        )
+
+        start += test_window
+        fold_id += 1
+
+    if not oos_chunks:
+        return pd.DataFrame(), pd.DataFrame()
+
+    oos_all = pd.concat(oos_chunks, ignore_index=True).sort_values("date").reset_index(drop=True)
+    oos_all["wf_strategy_equity_tc"] = (1.0 + oos_all["strategy_return_tc"]).cumprod()
+    oos_all["wf_buy_hold_equity"] = (1.0 + oos_all["buy_hold_return"]).cumprod()
+    folds_df = pd.DataFrame(fold_rows)
+    return oos_all, folds_df
+
+
 def plot_equity_curves(df: pd.DataFrame, output_png: Path) -> None:
     # Visualization is critical for quick sanity checks and storytelling.
     # 可视化有助于快速做策略体检，也有助于项目展示与汇报。
     plt.figure(figsize=(11, 6))
     plt.plot(df["date"], df["buy_hold_equity"], label="Buy & Hold", linewidth=2.0, alpha=0.9)
     plt.plot(df["date"], df["strategy_equity"], label="MA20/MA60 (No TC)", linewidth=1.8)
-    plt.plot(df["date"], df["strategy_equity_tc"], label="MA20/MA60 (5 bps One-Way TC)", linewidth=1.8)
+    plt.plot(df["date"], df["strategy_equity_tc"], label="MA20/MA60 (Realistic TC+Slippage)", linewidth=1.8)
     plt.title("NVIDIA Dual Moving Average Backtest: Equity Curves")
     plt.xlabel("Date")
     plt.ylabel("Cumulative Growth of $1")
@@ -182,12 +321,190 @@ def plot_equity_curves(df: pd.DataFrame, output_png: Path) -> None:
     plt.close()
 
 
+def plot_grid_heatmap(grid_df: pd.DataFrame, output_png: Path) -> None:
+    pivot = grid_df.pivot(index="short_window", columns="long_window", values="objective_score")
+    pivot = pivot.sort_index().sort_index(axis=1)
+    data = pivot.values
+
+    plt.figure(figsize=(9, 6))
+    im = plt.imshow(data, cmap="viridis", aspect="auto", origin="lower")
+    plt.colorbar(im, label="Objective Score (Sharpe - penalty)")
+    plt.xticks(range(len(pivot.columns)), [int(v) for v in pivot.columns])
+    plt.yticks(range(len(pivot.index)), [int(v) for v in pivot.index])
+    plt.xlabel("Long Window")
+    plt.ylabel("Short Window")
+    plt.title("MA Parameter Grid Objective Heatmap")
+
+    best_idx = np.unravel_index(np.nanargmax(data), data.shape)
+    plt.scatter(best_idx[1], best_idx[0], marker="x", color="red", s=120, linewidths=2, label="Best")
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=150)
+    plt.close()
+
+
+def _is_pareto_efficient(points: np.ndarray) -> np.ndarray:
+    # points columns: [maximize_metric, minimize_metric]
+    efficient = np.ones(points.shape[0], dtype=bool)
+    for i, p in enumerate(points):
+        if not efficient[i]:
+            continue
+        dominated = (
+            (points[:, 0] >= p[0]) & (points[:, 1] <= p[1]) & ((points[:, 0] > p[0]) | (points[:, 1] < p[1]))
+        )
+        dominated[i] = False
+        if dominated.any():
+            efficient[i] = False
+    return efficient
+
+
+def plot_pareto_like_frontier(grid_df: pd.DataFrame, output_png: Path) -> None:
+    # Pareto-like view: maximize annualized return, minimize drawdown penalty.
+    x = grid_df["max_drawdown_penalty"].values
+    y = grid_df["annualized_return"].values
+    points = np.column_stack([y, x])
+    efficient_mask = _is_pareto_efficient(points)
+    frontier = grid_df.loc[efficient_mask].sort_values("max_drawdown_penalty")
+
+    plt.figure(figsize=(9, 6))
+    scatter = plt.scatter(
+        grid_df["max_drawdown_penalty"],
+        grid_df["annualized_return"],
+        c=grid_df["trades_per_year"],
+        cmap="plasma",
+        s=40 + 90 * (grid_df["sharpe_ratio"] - grid_df["sharpe_ratio"].min() + 1e-6),
+        alpha=0.8,
+        edgecolors="none",
+    )
+    plt.colorbar(scatter, label="Trades per Year")
+    plt.plot(
+        frontier["max_drawdown_penalty"],
+        frontier["annualized_return"],
+        color="lime",
+        linewidth=2.0,
+        marker="o",
+        markersize=4,
+        label="Pareto-like Frontier",
+    )
+
+    best_idx = int(grid_df["objective_score"].idxmax())
+    best_row = grid_df.loc[best_idx]
+    plt.scatter(
+        [best_row["max_drawdown_penalty"]],
+        [best_row["annualized_return"]],
+        marker="X",
+        color="red",
+        s=140,
+        label=f"Selected Best ({int(best_row['short_window'])}/{int(best_row['long_window'])})",
+    )
+
+    plt.xlabel("Max Drawdown Penalty (abs(MDD))")
+    plt.ylabel("Annualized Return")
+    plt.title("Parameter Stability Frontier (Pareto-like)")
+    plt.grid(alpha=0.25)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=150)
+    plt.close()
+
+
+def plot_walk_forward_distribution(folds_df: pd.DataFrame, output_png: Path) -> None:
+    plt.figure(figsize=(11, 5))
+    plt.subplot(1, 2, 1)
+    plt.hist(folds_df["oos_sharpe"], bins=min(8, max(3, len(folds_df))), alpha=0.8, edgecolor="black")
+    plt.title("OOS Sharpe Distribution")
+    plt.xlabel("OOS Sharpe")
+    plt.ylabel("Count")
+    plt.grid(alpha=0.2)
+
+    plt.subplot(1, 2, 2)
+    plt.hist(
+        folds_df["oos_annualized_return"],
+        bins=min(8, max(3, len(folds_df))),
+        alpha=0.8,
+        edgecolor="black",
+    )
+    plt.title("OOS Annualized Return Distribution")
+    plt.xlabel("OOS Annualized Return")
+    plt.ylabel("Count")
+    plt.grid(alpha=0.2)
+
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=150)
+    plt.close()
+
+
+def update_readme_results(
+    readme_path: Path,
+    performance_summary: pd.DataFrame,
+    best_short: int,
+    best_long: int,
+    wf_summary: pd.DataFrame,
+    trade_penalty_lambda: float,
+    drawdown_penalty_lambda: float,
+) -> None:
+    def dataframe_to_markdown(df: pd.DataFrame) -> str:
+        table = df.copy()
+        table = table.reset_index()
+        headers = list(table.columns)
+        lines = []
+        lines.append("| " + " | ".join(str(h) for h in headers) + " |")
+        lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+        for _, row in table.iterrows():
+            values = [str(row[h]) for h in headers]
+            lines.append("| " + " | ".join(values) + " |")
+        return "\n".join(lines)
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    main_table = dataframe_to_markdown(performance_summary.round(4))
+    wf_table = dataframe_to_markdown(wf_summary.round(4))
+    wf_sharpe = float(wf_summary.loc["sharpe_ratio", "wf_ma_tc"]) if "wf_ma_tc" in wf_summary.columns else np.nan
+    bh_sharpe = float(wf_summary.loc["sharpe_ratio", "wf_buy_and_hold"]) if "wf_buy_and_hold" in wf_summary.columns else np.nan
+    conclusion = (
+        "滚动样本外中，MA 策略风险调整后表现优于基准。"
+        if np.isfinite(wf_sharpe) and np.isfinite(bh_sharpe) and wf_sharpe > bh_sharpe
+        else "滚动样本外中，MA 策略风险调整后未跑赢基准，需进一步优化。"
+    )
+
+    block = (
+        f"<!-- AUTO_RESULTS_START -->\n"
+        f"### 自动更新结果（Auto Updated Results）\n"
+        f"- 更新时间：`{now}`\n"
+        f"- 全样本网格搜索最优参数（按惩罚后目标）：`short={best_short}`, `long={best_long}`\n"
+        f"- 目标函数（Objective）：`Sharpe - λ1*trades_per_year - λ2*max_drawdown_penalty`\n"
+        f"- 其中：`λ1={trade_penalty_lambda}`, `λ2={drawdown_penalty_lambda}`\n\n"
+        f"#### 主回测绩效（Main Backtest Summary）\n\n{main_table}\n\n"
+        f"#### 滚动样本外绩效（Walk-Forward OOS Summary）\n\n{wf_table}\n"
+        f"\n#### 稳健性图表（Robustness Plots）\n"
+        f"![Parameter Heatmap](outputs/parameter_heatmap.png)\n\n"
+        f"![Parameter Pareto-like Frontier](outputs/parameter_pareto_like.png)\n\n"
+        f"![OOS Fold Distribution](outputs/oos_fold_distribution.png)\n\n"
+        f"#### 自动结论（Auto Conclusion）\n"
+        f"- {conclusion}\n"
+        f"<!-- AUTO_RESULTS_END -->"
+    )
+
+    content = readme_path.read_text(encoding="utf-8")
+    start_marker = "<!-- AUTO_RESULTS_START -->"
+    end_marker = "<!-- AUTO_RESULTS_END -->"
+    if start_marker in content and end_marker in content:
+        start = content.index(start_marker)
+        end = content.index(end_marker) + len(end_marker)
+        content = content[:start] + block + content[end:]
+    else:
+        content = content + "\n\n---\n\n" + block + "\n"
+    readme_path.write_text(content, encoding="utf-8")
+
+
 def run_backtest(
     input_csv: Path,
     output_dir: Path,
     short_window: int = 20,
     long_window: int = 60,
-    transaction_cost_one_way: float = 0.0005,
+    fixed_cost_one_way: float = 0.0005,
+    market_impact_one_way: float = 0.0002,
+    trade_penalty_lambda: float = 0.05,
+    drawdown_penalty_lambda: float = 0.6,
 ) -> None:
     """
     End-to-end pipeline: load -> signal -> evaluate -> export.
@@ -197,13 +514,39 @@ def run_backtest(
     output_results_csv = output_dir / "backtest_results.csv"
     output_summary_csv = output_dir / "performance_summary.csv"
     output_chart_png = output_dir / "equity_curves.png"
+    output_grid_csv = output_dir / "grid_search_summary.csv"
+    output_wf_results_csv = output_dir / "walk_forward_results.csv"
+    output_wf_folds_csv = output_dir / "walk_forward_folds.csv"
+    output_wf_summary_csv = output_dir / "walk_forward_summary.csv"
+    output_heatmap_png = output_dir / "parameter_heatmap.png"
+    output_pareto_png = output_dir / "parameter_pareto_like.png"
+    output_wf_dist_png = output_dir / "oos_fold_distribution.png"
 
     df = load_data(input_csv)
+    short_grid = [10, 20, 30, 40]
+    long_grid = [60, 90, 120, 150]
+
+    grid_df = run_grid_search(
+        df=df,
+        short_grid=short_grid,
+        long_grid=long_grid,
+        fixed_cost_one_way=fixed_cost_one_way,
+        market_impact_one_way=market_impact_one_way,
+        trade_penalty_lambda=trade_penalty_lambda,
+        drawdown_penalty_lambda=drawdown_penalty_lambda,
+    )
+    if grid_df.empty:
+        raise RuntimeError("Grid search returned no valid parameter combinations.")
+
+    best_short = int(grid_df.iloc[0]["short_window"])
+    best_long = int(grid_df.iloc[0]["long_window"])
+
     results = generate_signals(
         df=df,
-        short_window=short_window,
-        long_window=long_window,
-        transaction_cost_one_way=transaction_cost_one_way,
+        short_window=best_short,
+        long_window=best_long,
+        fixed_cost_one_way=fixed_cost_one_way,
+        market_impact_one_way=market_impact_one_way,
     )
 
     summary = pd.DataFrame(
@@ -216,7 +559,7 @@ def run_backtest(
                 daily_returns=results["strategy_return"],
                 position=results["lagged_signal"],
             ),
-            "ma_20_60_tc_5bps": calculate_performance_metrics(
+            "ma_20_60_realistic_cost": calculate_performance_metrics(
                 daily_returns=results["strategy_return_tc"],
                 position=results["lagged_signal"],
             ),
@@ -224,18 +567,72 @@ def run_backtest(
     )
     summary.index.name = "metric"
 
+    wf_results, wf_folds = run_walk_forward_validation(
+        df=df,
+        short_grid=short_grid,
+        long_grid=long_grid,
+        train_window=504,
+        test_window=126,
+        fixed_cost_one_way=fixed_cost_one_way,
+        market_impact_one_way=market_impact_one_way,
+        trade_penalty_lambda=trade_penalty_lambda,
+        drawdown_penalty_lambda=drawdown_penalty_lambda,
+    )
+    wf_summary = pd.DataFrame()
+    if not wf_results.empty:
+        wf_summary = pd.DataFrame(
+            {
+                "wf_buy_and_hold": calculate_performance_metrics(
+                    wf_results["buy_hold_return"], wf_results["buy_hold_position"]
+                ),
+                "wf_ma_tc": calculate_performance_metrics(
+                    wf_results["strategy_return_tc"], wf_results["lagged_signal"]
+                ),
+            }
+        )
+        wf_summary.index.name = "metric"
+
     # Save machine-readable outputs for later analysis/reporting.
     # 保存结构化输出，方便后续分析与报告复用。
     results.to_csv(output_results_csv, index=False)
     summary.to_csv(output_summary_csv)
+    grid_df.to_csv(output_grid_csv, index=False)
+    plot_grid_heatmap(grid_df, output_heatmap_png)
+    plot_pareto_like_frontier(grid_df, output_pareto_png)
+    if not wf_results.empty:
+        wf_results.to_csv(output_wf_results_csv, index=False)
+        wf_folds.to_csv(output_wf_folds_csv, index=False)
+        wf_summary.to_csv(output_wf_summary_csv)
+        plot_walk_forward_distribution(wf_folds, output_wf_dist_png)
     plot_equity_curves(results, output_chart_png)
+
+    readme_path = output_dir.parent / "README.md"
+    update_readme_results(
+        readme_path,
+        summary,
+        best_short,
+        best_long,
+        wf_summary if not wf_summary.empty else summary,
+        trade_penalty_lambda,
+        drawdown_penalty_lambda,
+    )
 
     # Explicit paths make it easy for beginners to find artifacts.
     # 明确打印文件路径，方便初学者定位输出结果。
     print("Backtest complete.")
+    print(f"Selected best parameters from grid search: short={best_short}, long={best_long}")
     print(f"Saved detailed backtest data: {output_results_csv}")
     print(f"Saved performance summary: {output_summary_csv}")
     print(f"Saved equity curve chart: {output_chart_png}")
+    print(f"Saved grid search summary: {output_grid_csv}")
+    print(f"Saved parameter heatmap: {output_heatmap_png}")
+    print(f"Saved parameter Pareto-like frontier plot: {output_pareto_png}")
+    if not wf_results.empty:
+        print(f"Saved walk-forward results: {output_wf_results_csv}")
+        print(f"Saved walk-forward fold details: {output_wf_folds_csv}")
+        print(f"Saved walk-forward summary: {output_wf_summary_csv}")
+        print(f"Saved OOS fold distribution plot: {output_wf_dist_png}")
+    print(f"Updated README auto-results block: {readme_path}")
     print("\nPerformance summary:")
     print(summary)
 
@@ -247,5 +644,8 @@ if __name__ == "__main__":
         output_dir=project_dir / "outputs",
         short_window=20,
         long_window=60,
-        transaction_cost_one_way=0.0005,
+        fixed_cost_one_way=0.0005,
+        market_impact_one_way=0.0002,
+        trade_penalty_lambda=0.05,
+        drawdown_penalty_lambda=0.6,
     )
