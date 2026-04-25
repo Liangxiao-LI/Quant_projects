@@ -1,4 +1,4 @@
-# <PROJECT_NAME>（NVIDIA MA20/MA60 回测）
+# NVIDIA MA20/MA60 回测
 
 <div align="center">
 
@@ -121,9 +121,7 @@ outputs/equity_curves.png
 - `outputs/equity_curves.png`：三策略净值曲线对比图
 
 ### 图像预览（Screenshot）
-![Equity Curves](<SCREENSHOT_PATH>)
-
-> 若图片不显示，请将 `<SCREENSHOT_PATH>` 替换为：`outputs/equity_curves.png`
+![Equity Curves](outputs/equity_curves.png)
 
 ### 读图建议（How to Read the Chart）
 - 看终值（Terminal Wealth）：最终累计收益谁更高
