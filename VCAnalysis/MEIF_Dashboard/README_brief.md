@@ -1,43 +1,45 @@
-# MEIF West Midlands Equity Fund - Daily Management Dashboard
+# MEIF Relevant Deals Dashboard
 
-> Source: `MEIF West Midlands Equity Fund_investment.csv` | Records: **8** | Capital coverage: **7/8 (87.5%)** using `totalraised`
+> Sources: `MEIF West Midlands Equity Fund_investment.csv` + `Deal_Info_20260426.csv` | Filtered by investor names: Future Planet Capital / Midven / Midlands Engine Investment Fund (+ MEIF variations)
+
+> Relevant filtered deals: **12** (matched using columns: dealsynopsis, investors, newinvestors, followoninvestors)
 
 ## 1) Executive Fund Snapshot
 
 | Metric | Value |
 |---|---|
-| Total invested capital | 12.71 |
-| Number of investments | 8 |
+| Total relevant deals | 12 |
+| Total invested capital | 8.88 |
 | Number of portfolio companies | 8 |
-| Average investment size | 1.82 |
-| Median investment size | 1.95 |
-| Largest investment | CyberQ Group (4.11) |
-| Most recent investment | CyberQ Group (2026-03-16) |
+| Average deal size | 0.99 |
+| Median deal size | 0.71 |
+| Largest investment | IDenteq (1.95) |
+| Most recent investment | CyberQ Group (2026-03-01) |
 
-Focus: compact view for daily portfolio monitoring and exception tracking.
+Focus: only deal activity tied to target investors/funds for day-to-day monitoring.
 
 ## 2) Capital Allocation Breakdown
 
 ### Top Companies by Invested Amount
 | Company | Capital | Share of Total |
 |---|---|---|
-| CyberQ Group | 4.11 | 32.3% |
-| Medmin | 2.58 | 20.3% |
-| iEthico | 2.36 | 18.6% |
+| iEthico | 2.36 | 26.6% |
+| IDenteq | 1.95 | 22.0% |
+| Medmin | 1.85 | 20.8% |
 
 ### Allocation by Sector
 | Sector | # Investments | Capital | Share |
 |---|---|---|---|
-| Information Technology | 3 | 6.78 | 53.4% |
-| Healthcare | 2 | 4.94 | 38.9% |
-| Consumer Products and Services (B2C) | 1 | 0.68 | 5.4% |
-| Energy | 1 | 0.30 | 2.4% |
+| Healthcare | 3 | 4.21 | 47.4% |
+| Information Technology | 3 | 3.69 | 41.5% |
+| Consumer Products and Services (B2C) | 1 | 0.68 | 7.7% |
+| Energy | 2 | 0.30 | 3.4% |
 
 ```mermaid
 pie showData
     title Sector Allocation
-    "Information Technology" : 6.7817
-    "Healthcare" : 4.9437
+    "Healthcare" : 4.2083
+    "Information Technology" : 3.6911
     "Consumer Products and Services (B2C)" : 0.6833
     "Energy" : 0.3021
 ```
@@ -46,53 +48,73 @@ Shows where exposure is concentrated by industry theme.
 ### Allocation by Geography
 | Region | # Investments | Capital | Share |
 |---|---|---|---|
-| England | 7 | 12.71 | 100.0% |
+| England | 9 | 8.88 | 100.0% |
 
 ```mermaid
 pie showData
     title Geography Allocation
-    "England" : 12.7107
+    "England" : 8.8848
 ```
 Highlights location concentration and sourcing breadth.
 
 ### Allocation by Year
-| Year | # Investments | Capital |
+| Year | # Deals | Capital |
 |---|---|---|
-| 2022 | 1 | 0.30 |
-| 2023 | 2 | 3.27 |
-| 2025 | 2 | 2.67 |
-| 2026 | 1 | 4.11 |
+| 2020 | 2 | 0.67 |
+| 2021 | 2 | 0.79 |
+| 2022 | 1 | 0.71 |
+| 2023 | 1 | 1.85 |
+| 2024 | 2 | 2.91 |
+| 2025 | 1 | 1.95 |
 
 ```mermaid
 xychart-beta
     title "Capital Deployment by Year"
-    x-axis ["2022", "2023", "2025", "2026"]
-    y-axis "Capital (totalraised)" 0 --> 4.73
-    bar [0.3021, 3.2672, 2.6710, 4.1106]
+    x-axis ["2020", "2021", "2022", "2023", "2024", "2025"]
+    y-axis "Capital (dealsize)" 0 --> 3.35
+    bar [0.6694, 0.7877, 0.7132, 1.8486, 2.9112, 1.9546]
 ```
 Tracks deployment pace and vintage clustering.
+
+### Top Co-Investors (in filtered deals)
+| Co-investor | # Deals |
+|---|---|
+| Uk Innovation & Science Seed Fund | 3 |
 
 ## 3) Concentration and Risk Checks
 
 | Check | Result |
 |---|---|
-| Top 5 investments as % of total capital | 92.2% |
-| Largest sector exposure | Information Technology (53.4%) |
+| Top 5 companies as % of total capital | 91.3% |
+| Largest sector exposure | Healthcare (47.4%) |
 | Largest geography exposure | England (100.0%) |
-| Missing investment amount rows | 1 |
-| Unusually large deals (IQR rule) | None flagged |
+| Unusually large deals (IQR rule) | None flagged / insufficient data |
 
 ## 4) Practical Management Insights
 
-- Concentration is high: top 5 holdings represent **92.2%** of invested capital; prioritize diversification in upcoming deployments.
-- Sector exposure is skewed to **Information Technology** at **53.4%**; review target sector limits.
-- Geographic exposure is concentrated in **England** (100.0%); expand regional pipeline where mandate allows.
-- Data quality: some rows have missing investment amounts; close gaps before monthly reporting.
-- Deployment pace is uneven; peak year is **2026**. Track whether new deals smooth vintage risk.
+- Capital concentration is high: top 5 companies represent **91.3%** of tracked capital.
+- Geographic exposure is concentrated in **England** (100.0%).
+- Some filtered deals have missing deal size; this reduces capital-based comparability.
+- Deployment is concentrated by vintage; peak year is **2024**.
 
 ### Suggested Daily Follow-Ups
 - Compare each new deal against median ticket size before IC sign-off.
 - Keep top holdings and missing data fields on a weekly exception list.
+
+## 5) Data Quality and Coverage
+
+| Field | Missing | Status |
+|---|---|---|
+| Deal size | 3/12 (25.0%) | Partial |
+| Deal date | 0/12 (0.0%) | OK |
+| Sector | 0/12 (0.0%) | OK |
+| Stage | 0/12 (0.0%) | OK |
+| Geography | 0/12 (0.0%) | OK |
+| Deal ID | 0/12 (0.0%) | OK |
+
+- Filtering logic uses case-insensitive pattern matching over investor/fund-related text fields.
+- Join logic prefers `companyid`; if unavailable, falls back to normalized company name.
+- Metrics requiring unavailable columns are skipped and documented above.
 
 ## Rebuild
 

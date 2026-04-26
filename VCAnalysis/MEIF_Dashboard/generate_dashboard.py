@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -8,7 +9,15 @@ import pandas as pd
 
 
 CSV_FILE = "MEIF West Midlands Equity Fund_investment.csv"
+DEAL_FILE = "Deal_Info_20260426.csv"
 README_FILE = "README.md"
+TARGET_INVESTOR_PATTERNS = [
+    "future planet capital",
+    "midven",
+    "midlands engine investment fund",
+    "midlands engine",
+    "meif",
+]
 
 
 def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -44,6 +53,16 @@ def md_table(headers: list[str], rows: list[list[str]]) -> str:
     for row in rows:
         lines.append("| " + " | ".join(str(v) for v in row) + " |")
     return "\n".join(lines)
+
+
+def normalize_name(series: pd.Series) -> pd.Series:
+    return (
+        series.fillna("")
+        .astype(str)
+        .str.lower()
+        .str.replace(r"[^a-z0-9]+", " ", regex=True)
+        .str.strip()
+    )
 
 
 def make_breakdown(df: pd.DataFrame, group_col: str, amount_col: str) -> pd.DataFrame:
@@ -102,86 +121,224 @@ def mermaid_bar_year(yearly: pd.DataFrame, amount_col: str) -> str:
     )
 
 
+def extract_coinvestors(text: str) -> list[str]:
+    """
+    Extract rough co-investor names from deal synopsis snippets.
+    We parse phrases like "from X, Y and Z on ...", then remove target investors
+    and generic placeholders.
+    """
+    if not text:
+        return []
+    text_l = str(text).lower()
+    match = re.search(r"\bfrom\s+(.+?)(?:\s+on\s+|\s+in\s+approximately|\.)", text_l)
+    if not match:
+        return []
+
+    raw = match.group(1)
+    chunks = re.split(r",| and | with participation from | led by ", raw)
+    out: list[str] = []
+    generic_tokens = {
+        "other undisclosed investors",
+        "other undisclosed investor",
+        "undisclosed investors",
+        "undisclosed investor",
+        "other investors",
+        "other",
+    }
+    for token in chunks:
+        name = re.sub(r"[^a-z0-9& ]+", " ", token).strip()
+        if not name:
+            continue
+        if any(p in name for p in TARGET_INVESTOR_PATTERNS):
+            continue
+        if name in generic_tokens:
+            continue
+        out.append(name.title())
+    return out
+
+
+def detect_relevant_deals(deals: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    candidate_text_cols = [
+        c
+        for c in [
+            "dealsynopsis",
+            "investor",
+            "investors",
+            "newinvestors",
+            "followoninvestors",
+            "fund",
+            "fundname",
+            "participant",
+            "participants",
+        ]
+        if c in deals.columns
+    ]
+
+    if not candidate_text_cols:
+        return deals.iloc[0:0].copy(), []
+
+    combined_text = deals[candidate_text_cols].fillna("").astype(str).agg(" | ".join, axis=1).str.lower()
+    mask = pd.Series(False, index=deals.index)
+    for pat in TARGET_INVESTOR_PATTERNS:
+        mask |= combined_text.str.contains(re.escape(pat), regex=True)
+    return deals.loc[mask].copy(), candidate_text_cols
+
+
+def attach_company_info(relevant_deals: pd.DataFrame, company_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Join filtered deals back to company-level attributes.
+    Prefer companyid; fallback to normalized companyname if needed.
+    """
+    if "companyid" in relevant_deals.columns and "companyid" in company_df.columns:
+        joined = relevant_deals.merge(
+            company_df,
+            on="companyid",
+            how="left",
+            suffixes=("_deal", "_company"),
+        )
+        if joined["companyname_company"].notna().any():
+            return joined
+
+    if "companyname" in relevant_deals.columns and "companyname" in company_df.columns:
+        left = relevant_deals.copy()
+        right = company_df.copy()
+        left["_name_key"] = normalize_name(left["companyname"])
+        right["_name_key"] = normalize_name(right["companyname"])
+        joined = left.merge(right, on="_name_key", how="left", suffixes=("_deal", "_company"))
+        return joined
+
+    return relevant_deals.copy()
+
+
 def generate_readme(base_dir: Path, brief: bool = False) -> str:
-    csv_path = base_dir / CSV_FILE
-    if not csv_path.exists():
-        raise FileNotFoundError(f"CSV not found: {csv_path}")
+    company_path = base_dir / CSV_FILE
+    deal_path = base_dir / DEAL_FILE
+    if not company_path.exists():
+        raise FileNotFoundError(f"Company CSV not found: {company_path}")
+    if not deal_path.exists():
+        raise FileNotFoundError(f"Deal CSV not found: {deal_path}")
 
-    raw = pd.read_csv(csv_path)
-    df = standardize_columns(raw)
+    company_df = standardize_columns(pd.read_csv(company_path))
+    deal_df = standardize_columns(pd.read_csv(deal_path))
 
-    amount_col = first_existing(df, ["totalraised", "totalraisednativeamount"])
-    company_col = first_existing(df, ["companyname", "companylegalname"])
-    sector_col = first_existing(df, ["primaryindustrysector", "primaryindustrygroup"])
-    stage_col = first_existing(df, ["firstfinancingdealclass", "firstfinancingdealtype"])
-    geo_col = first_existing(df, ["hqstate_province", "hqcity", "hqcountry", "hqglobalregion"])
-    date_col = first_existing(df, ["lastfinancingdate", "firstfinancingdate", "companyfinancingstatusdate"])
+    relevant_deals, matched_cols = detect_relevant_deals(deal_df)
+    joined = attach_company_info(relevant_deals, company_df)
 
-    if amount_col is None or company_col is None:
-        raise ValueError("Required columns missing: need amount and company fields.")
+    amount_col = first_existing(joined, ["dealsize", "totalinvestedcapital", "nativeamountofdeal"])
+    date_col = first_existing(joined, ["dealdate", "announceddate", "currentregistrationdate"])
+    company_col = first_existing(joined, ["companyname_deal", "companyname_company", "companyname"])
+    sector_col = first_existing(joined, ["primaryindustrysector", "primaryindustrygroup"])
+    stage_col = first_existing(joined, ["dealclass", "dealtype", "firstfinancingdealclass"])
+    geo_col = first_existing(joined, ["hqstate_province", "hqcity", "hqcountry", "hqglobalregion", "sitelocation"])
+    deal_id_col = first_existing(joined, ["dealid", "dealno"])
 
-    df[amount_col] = pd.to_numeric(df[amount_col], errors="coerce")
+    if company_col is None:
+        raise ValueError("Required company name column not found after join.")
+
+    if amount_col:
+        joined[amount_col] = pd.to_numeric(joined[amount_col], errors="coerce")
     if date_col:
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        joined[date_col] = pd.to_datetime(joined[date_col], errors="coerce")
 
-    valid = df.dropna(subset=[amount_col]).copy()
-    total_rows = len(df)
-    covered_rows = len(valid)
-    coverage_pct = (covered_rows / total_rows * 100) if total_rows else 0.0
+    valid_amount = joined.dropna(subset=[amount_col]).copy() if amount_col else joined.iloc[0:0].copy()
+    total_deals = len(joined)
+    total_capital = valid_amount[amount_col].sum() if amount_col else None
+    avg_ticket = valid_amount[amount_col].mean() if amount_col and not valid_amount.empty else None
+    med_ticket = valid_amount[amount_col].median() if amount_col and not valid_amount.empty else None
+    unique_companies = joined[company_col].dropna().nunique()
 
-    total_capital = valid[amount_col].sum()
-    avg_ticket = valid[amount_col].mean()
-    med_ticket = valid[amount_col].median()
-    largest_idx = valid[amount_col].idxmax() if not valid.empty else None
-    largest_name = valid.loc[largest_idx, company_col] if largest_idx is not None else "N/A"
-    largest_amount = valid.loc[largest_idx, amount_col] if largest_idx is not None else None
+    largest_name = "N/A"
+    largest_amount = None
+    if amount_col and not valid_amount.empty:
+        idx = valid_amount[amount_col].idxmax()
+        largest_name = str(valid_amount.loc[idx, company_col])
+        largest_amount = valid_amount.loc[idx, amount_col]
 
     recent_name = "N/A"
     recent_date = "N/A"
-    if date_col and not valid[date_col].dropna().empty:
-        recent_idx = valid[date_col].idxmax()
-        recent_name = valid.loc[recent_idx, company_col]
-        recent_date = valid.loc[recent_idx, date_col].date().isoformat()
+    if date_col and joined[date_col].notna().any():
+        idx = joined[date_col].idxmax()
+        recent_name = str(joined.loc[idx, company_col])
+        recent_date = joined.loc[idx, date_col].date().isoformat()
 
-    unique_companies = df[company_col].nunique(dropna=True)
-    top_companies = (
-        valid[[company_col, amount_col]]
-        .sort_values(amount_col, ascending=False)
-        .head(5)
-        .assign(share_pct=lambda x: x[amount_col] / total_capital * 100 if total_capital > 0 else 0)
+    top_companies = pd.DataFrame()
+    top5_share = None
+    if amount_col and not valid_amount.empty:
+        top_companies = (
+            valid_amount.groupby(company_col, as_index=False)
+            .agg(capital=(amount_col, "sum"), deals=(company_col, "size"))
+            .sort_values("capital", ascending=False)
+        )
+        top_companies["share_pct"] = top_companies["capital"] / total_capital * 100 if total_capital else 0.0
+        top5_share = top_companies.head(5)["capital"].sum() / total_capital * 100 if total_capital else None
+
+    sector_breakdown = (
+        make_breakdown(valid_amount, sector_col, amount_col) if sector_col and amount_col and not valid_amount.empty else pd.DataFrame()
+    )
+    stage_breakdown = (
+        make_breakdown(valid_amount, stage_col, amount_col) if stage_col and amount_col and not valid_amount.empty else pd.DataFrame()
+    )
+    geo_breakdown = (
+        make_breakdown(valid_amount, geo_col, amount_col) if geo_col and amount_col and not valid_amount.empty else pd.DataFrame()
     )
 
-    sector_breakdown = make_breakdown(valid, sector_col, amount_col) if sector_col else pd.DataFrame()
-    stage_breakdown = make_breakdown(valid, stage_col, amount_col) if stage_col else pd.DataFrame()
-    geo_breakdown = make_breakdown(valid, geo_col, amount_col) if geo_col else pd.DataFrame()
-
     yearly = pd.DataFrame()
-    if date_col:
+    if date_col and amount_col and not valid_amount.empty:
         yearly = (
-            valid.assign(year=valid[date_col].dt.year)
+            valid_amount.assign(year=valid_amount[date_col].dt.year)
             .dropna(subset=["year"])
             .groupby("year", as_index=False)
-            .agg(investments=("year", "size"), capital=(amount_col, "sum"))
+            .agg(deals=("year", "size"), capital=(amount_col, "sum"))
             .sort_values("year")
         )
 
-    top5_share = top_companies[amount_col].sum() / total_capital * 100 if total_capital > 0 else 0.0
     largest_sector = sector_breakdown.iloc[0] if not sector_breakdown.empty else None
     largest_geo = geo_breakdown.iloc[0] if not geo_breakdown.empty else None
 
-    q1 = valid[amount_col].quantile(0.25) if not valid.empty else 0.0
-    q3 = valid[amount_col].quantile(0.75) if not valid.empty else 0.0
-    iqr = q3 - q1
-    high_threshold = q3 + 1.5 * iqr
-    unusually_large = valid[valid[amount_col] > high_threshold] if iqr > 0 else pd.DataFrame()
+    unusually_large = pd.DataFrame()
+    if amount_col and not valid_amount.empty and len(valid_amount) >= 4:
+        q1 = valid_amount[amount_col].quantile(0.25)
+        q3 = valid_amount[amount_col].quantile(0.75)
+        iqr = q3 - q1
+        if iqr > 0:
+            unusually_large = valid_amount[valid_amount[amount_col] > (q3 + 1.5 * iqr)]
 
-    missing_amount = total_rows - covered_rows
+    # Co-investors inferred from deal synopsis text.
+    coinvestors = pd.Series(dtype=int)
+    if "dealsynopsis" in relevant_deals.columns:
+        parsed = relevant_deals["dealsynopsis"].fillna("").astype(str).apply(extract_coinvestors)
+        counts: dict[str, int] = {}
+        for arr in parsed:
+            for name in set(arr):
+                counts[name] = counts.get(name, 0) + 1
+        if counts:
+            coinvestors = pd.Series(counts).sort_values(ascending=False)
+
+    missing_data_rows = []
+    for label, col in [
+        ("Deal size", amount_col),
+        ("Deal date", date_col),
+        ("Sector", sector_col),
+        ("Stage", stage_col),
+        ("Geography", geo_col),
+        ("Deal ID", deal_id_col),
+    ]:
+        if not col or col not in joined.columns:
+            missing_data_rows.append([label, "Column not available", "Metric skipped"])
+            continue
+        missing_n = int(joined[col].isna().sum())
+        missing_pct = (missing_n / total_deals * 100) if total_deals else 0.0
+        missing_data_rows.append([label, f"{missing_n}/{total_deals} ({missing_pct:.1f}%)", "OK" if missing_n == 0 else "Partial"])
 
     lines: list[str] = []
-    lines.append("# MEIF West Midlands Equity Fund - Daily Management Dashboard")
+    lines.append("# MEIF Relevant Deals Dashboard")
     lines.append("")
     lines.append(
-        f"> Source: `{CSV_FILE}` | Records: **{total_rows}** | Capital coverage: **{covered_rows}/{total_rows} ({coverage_pct:.1f}%)** using `{amount_col}`"
+        f"> Sources: `{CSV_FILE}` + `{DEAL_FILE}` | Filtered by investor names: Future Planet Capital / Midven / Midlands Engine Investment Fund (+ MEIF variations)"
+    )
+    lines.append("")
+    lines.append(
+        f"> Relevant filtered deals: **{total_deals}** (matched using columns: {', '.join(matched_cols) if matched_cols else 'none'})"
     )
     lines.append("")
     lines.append("## 1) Executive Fund Snapshot")
@@ -190,18 +347,18 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
         md_table(
             ["Metric", "Value"],
             [
-                ["Total invested capital", fmt_num(total_capital)],
-                ["Number of investments", str(total_rows)],
+                ["Total relevant deals", str(total_deals)],
+                ["Total invested capital", fmt_num(total_capital) if amount_col else "N/A"],
                 ["Number of portfolio companies", str(unique_companies)],
-                ["Average investment size", fmt_num(avg_ticket)],
-                ["Median investment size", fmt_num(med_ticket)],
+                ["Average deal size", fmt_num(avg_ticket) if amount_col else "N/A"],
+                ["Median deal size", fmt_num(med_ticket) if amount_col else "N/A"],
                 ["Largest investment", f"{largest_name} ({fmt_num(largest_amount)})"],
                 ["Most recent investment", f"{recent_name} ({recent_date})" if date_col else "N/A"],
             ],
         )
     )
     lines.append("")
-    lines.append("Focus: compact view for daily portfolio monitoring and exception tracking.")
+    lines.append("Focus: only deal activity tied to target investors/funds for day-to-day monitoring.")
     lines.append("")
 
     lines.append("## 2) Capital Allocation Breakdown")
@@ -212,7 +369,7 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
         md_table(
             ["Company", "Capital", "Share of Total"],
             [
-                [row[company_col], fmt_num(row[amount_col]), f"{row['share_pct']:.1f}%"]
+                [row[company_col], fmt_num(row["capital"]), f"{row['share_pct']:.1f}%"]
                 for _, row in top_companies.head(top_n).iterrows()
             ]
             or [["N/A", "N/A", "N/A"]],
@@ -272,9 +429,9 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
         lines.append("### Allocation by Year")
         lines.append(
             md_table(
-                ["Year", "# Investments", "Capital"],
+                ["Year", "# Deals", "Capital"],
                 [
-                    [str(int(r["year"])), str(int(r["investments"])), fmt_num(r["capital"])]
+                    [str(int(r["year"])), str(int(r["deals"])), fmt_num(r["capital"])]
                     for _, r in yearly.iterrows()
                 ],
             )
@@ -284,10 +441,16 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
         lines.append("Tracks deployment pace and vintage clustering.")
         lines.append("")
 
+    if not coinvestors.empty:
+        lines.append("### Top Co-Investors (in filtered deals)")
+        rows = [[name, int(cnt)] for name, cnt in coinvestors.head(8).items()]
+        lines.append(md_table(["Co-investor", "# Deals"], rows))
+        lines.append("")
+
     lines.append("## 3) Concentration and Risk Checks")
     lines.append("")
     risk_rows = [
-        ["Top 5 investments as % of total capital", f"{top5_share:.1f}%"],
+        ["Top 5 companies as % of total capital", f"{top5_share:.1f}%" if top5_share is not None else "N/A"],
         [
             "Largest sector exposure",
             f"{largest_sector['bucket']} ({largest_sector['share_pct']:.1f}%)" if largest_sector is not None else "N/A",
@@ -296,8 +459,13 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
             "Largest geography exposure",
             f"{largest_geo['bucket']} ({largest_geo['share_pct']:.1f}%)" if largest_geo is not None else "N/A",
         ],
-        ["Missing investment amount rows", str(missing_amount)],
-        ["Unusually large deals (IQR rule)", ", ".join(unusually_large[company_col].tolist()) or "None flagged"],
+        [
+            "Unusually large deals (IQR rule)",
+            ", ".join(
+                f"{r[company_col]} ({fmt_num(r[amount_col])})" for _, r in unusually_large[[company_col, amount_col]].iterrows()
+            )
+            or "None flagged / insufficient data",
+        ],
     ]
     lines.append(md_table(["Check", "Result"], risk_rows))
     lines.append("")
@@ -305,23 +473,25 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
     lines.append("## 4) Practical Management Insights")
     lines.append("")
     insights: list[str] = []
-    if top5_share >= 75:
+    if top5_share is not None and top5_share >= 75:
         insights.append(
-            f"- Concentration is high: top 5 holdings represent **{top5_share:.1f}%** of invested capital; prioritize diversification in upcoming deployments."
+            f"- Capital concentration is high: top 5 companies represent **{top5_share:.1f}%** of tracked capital."
         )
     if largest_sector is not None and largest_sector["share_pct"] >= 50:
         insights.append(
-            f"- Sector exposure is skewed to **{largest_sector['bucket']}** at **{largest_sector['share_pct']:.1f}%**; review target sector limits."
+            f"- Sector exposure is skewed to **{largest_sector['bucket']}** at **{largest_sector['share_pct']:.1f}%**."
         )
     if largest_geo is not None and largest_geo["share_pct"] >= 70:
         insights.append(
-            f"- Geographic exposure is concentrated in **{largest_geo['bucket']}** ({largest_geo['share_pct']:.1f}%); expand regional pipeline where mandate allows."
+            f"- Geographic exposure is concentrated in **{largest_geo['bucket']}** ({largest_geo['share_pct']:.1f}%)."
         )
-    if missing_amount > 0:
-        insights.append("- Data quality: some rows have missing investment amounts; close gaps before monthly reporting.")
+    if amount_col and int(joined[amount_col].isna().sum()) > 0:
+        insights.append("- Some filtered deals have missing deal size; this reduces capital-based comparability.")
     if date_col and not yearly.empty and len(yearly) > 1:
         peak_year = int(yearly.loc[yearly["capital"].idxmax(), "year"])
-        insights.append(f"- Deployment pace is uneven; peak year is **{peak_year}**. Track whether new deals smooth vintage risk.")
+        insights.append(f"- Deployment is concentrated by vintage; peak year is **{peak_year}**.")
+    if coinvestors.empty:
+        insights.append("- Co-investor ranking is limited because investor-name columns are sparse; synopsis parsing only gives partial coverage.")
     if not insights:
         insights.append("- Current allocation looks balanced on available fields; continue monitoring new deals against concentration thresholds.")
 
@@ -343,6 +513,14 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
                 "- Update missing data fields weekly to keep dashboard decision-ready.",
             ]
         )
+    lines.append("")
+    lines.append("## 5) Data Quality and Coverage")
+    lines.append("")
+    lines.append(md_table(["Field", "Missing", "Status"], missing_data_rows))
+    lines.append("")
+    lines.append("- Filtering logic uses case-insensitive pattern matching over investor/fund-related text fields.")
+    lines.append("- Join logic prefers `companyid`; if unavailable, falls back to normalized company name.")
+    lines.append("- Metrics requiring unavailable columns are skipped and documented above.")
     lines.append("")
     lines.append("## Rebuild")
     lines.append("")
