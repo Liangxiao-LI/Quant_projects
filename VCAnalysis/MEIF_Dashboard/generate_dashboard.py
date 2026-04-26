@@ -518,23 +518,60 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
     lines.append("")
     lines.append(md_table(["Field", "Missing", "Status"], missing_data_rows))
     lines.append("")
-    lines.append("## 6) Data Cleaning Process")
-    lines.append("")
-    lines.append("- **Column normalization:** standardized both CSV headers to lowercase `snake_case` to prevent casing/spacing mismatches.")
-    lines.append("- **Text normalization:** normalized company names and investor text for case-insensitive matching and fallback joins.")
-    lines.append("- **Investor/fund filtering:** scanned investor-related text fields and `dealsynopsis` using keyword patterns (`Future Planet Capital`, `Midven`, `Midlands Engine Investment Fund`, `MEIF`, `Midlands Engine`).")
-    lines.append("- **Type coercion:** converted deal amount columns to numeric and date columns to datetime with safe coercion (`errors=\"coerce\"`).")
-    lines.append("- **Join logic:** merged filtered deal-level rows to company-level attributes using `companyid` first, then normalized `companyname` fallback.")
-    lines.append("- **Missing-value handling:** excluded null amounts from capital-based metrics; tracked missingness for key fields in the data-quality table.")
-    lines.append("- **Metric safeguards:** skipped unavailable metrics gracefully and marked them in the README instead of failing generation.")
-    lines.append("")
-    lines.append("- Filtering logic uses case-insensitive pattern matching over investor/fund-related text fields.")
-    lines.append("- Join logic prefers `companyid`; if unavailable, falls back to normalized company name.")
-    lines.append("- Metrics requiring unavailable columns are skipped and documented above.")
-    lines.append("")
     lines.append("## Rebuild")
     lines.append("")
     lines.append("Run `python generate_dashboard.py` for full dashboard, or `python generate_dashboard.py --brief` for one-page mode.")
+    lines.append("")
+    lines.append("## Data Cleaning & Filtering Workflow (Audit Trail)")
+    lines.append("")
+    lines.append("### Step 1: Load and standardise both datasets")
+    lines.append(
+        md_table(
+            ["Step 1 Item", "Details"],
+            [
+                ["Input", f"`{CSV_FILE}` and `{DEAL_FILE}` raw CSV exports"],
+                ["Processing", "Standardize headers to lowercase `snake_case`; trim text; normalize key text fields (company, investor/fund, sector, stage, geography); parse date and deal-size fields with safe coercion"],
+                ["Output", "Schema-consistent company-level and deal-level dataframes ready for filtering and join"],
+                ["Impact on metrics", "Prevents casing/spacing mismatches and reduces parsing errors in date, amount, and grouping calculations"],
+            ],
+        )
+    )
+    lines.append("")
+    lines.append("### Step 2: Identify relevant MEIF-related deals")
+    lines.append(
+        md_table(
+            ["Step 2 Item", "Details"],
+            [
+                ["Input", "Standardized deal-level dataframe"],
+                ["Processing", "Case-insensitive keyword matching across investor/fund-related text fields for `Future Planet Capital`, `Midven`, `Midlands Engine Investment Fund`, plus `MEIF` / `Midlands Engine` variations; drop non-matching rows; deduplicate repeated deal records where applicable"],
+                ["Output", "Filtered relevant-deals dataframe containing only target-fund-linked transactions"],
+                ["Impact on metrics", "Ensures all dashboard KPIs exclude unrelated investors/funds and reflect MEIF-relevant activity only"],
+            ],
+        )
+    )
+    lines.append("")
+    lines.append("### Step 3: Join filtered deals to company-level information")
+    lines.append(
+        md_table(
+            ["Step 3 Item", "Details"],
+            [
+                ["Input", "Filtered relevant-deals dataframe + standardized company-level dataframe"],
+                ["Processing", "Join keys applied in priority order: `companyid` (preferred), then fallback to cleaned company-name matching when IDs are unavailable"],
+                ["Output", "Final analytics dataset used for all summary metrics, breakdowns, concentration checks, and insights"],
+                ["Impact on metrics", "Links deal activity to sector/stage/geography/company attributes and prevents leakage from unfiltered company universe"],
+            ],
+        )
+    )
+    lines.append("")
+    lines.append("```mermaid")
+    lines.append("flowchart LR")
+    lines.append("    A[Load company-level investment file] --> C[Standardise and clean fields]")
+    lines.append("    B[Load deal information file] --> C")
+    lines.append("    C --> D[Filter for Future Planet Capital / Midven / MEIF deals]")
+    lines.append("    D --> E[Join filtered deals to company-level data]")
+    lines.append("    E --> F[Generate investor dashboard metrics]")
+    lines.append("    F --> G[Update README dashboard]")
+    lines.append("```")
     lines.append("")
 
     return "\n".join(lines)
