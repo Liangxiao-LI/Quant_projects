@@ -4,6 +4,16 @@
 
 > Relevant filtered deals: **12** (matched using columns: dealsynopsis, investors, newinvestors, followoninvestors)
 
+## Table of Contents
+
+- [1) Executive Fund Snapshot](#1-executive-fund-snapshot)
+- [2) Capital Allocation Breakdown](#2-capital-allocation-breakdown)
+- [3) Concentration and Risk Checks](#3-concentration-and-risk-checks)
+- [4) Practical Management Insights](#4-practical-management-insights)
+- [5) Data Quality and Coverage](#5-data-quality-and-coverage)
+- [Rebuild](#rebuild)
+- [Data Cleaning & Filtering Workflow (Audit Trail)](#data-cleaning--filtering-workflow-audit-trail)
+
 ## 1) Executive Fund Snapshot
 
 | Metric | Value |

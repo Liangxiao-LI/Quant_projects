@@ -341,6 +341,16 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
         f"> Relevant filtered deals: **{total_deals}** (matched using columns: {', '.join(matched_cols) if matched_cols else 'none'})"
     )
     lines.append("")
+    lines.append("## Table of Contents")
+    lines.append("")
+    lines.append("- [1) Executive Fund Snapshot](#1-executive-fund-snapshot)")
+    lines.append("- [2) Capital Allocation Breakdown](#2-capital-allocation-breakdown)")
+    lines.append("- [3) Concentration and Risk Checks](#3-concentration-and-risk-checks)")
+    lines.append("- [4) Practical Management Insights](#4-practical-management-insights)")
+    lines.append("- [5) Data Quality and Coverage](#5-data-quality-and-coverage)")
+    lines.append("- [Rebuild](#rebuild)")
+    lines.append("- [Data Cleaning & Filtering Workflow (Audit Trail)](#data-cleaning--filtering-workflow-audit-trail)")
+    lines.append("")
     lines.append("## 1) Executive Fund Snapshot")
     lines.append("")
     lines.append(
