@@ -24,8 +24,6 @@ Focus: compact view for daily portfolio monitoring and exception tracking.
 | CyberQ Group | 4.11 | 32.3% |
 | Medmin | 2.58 | 20.3% |
 | iEthico | 2.36 | 18.6% |
-| IDenteq | 1.95 | 15.4% |
-| D-RisQ | 0.72 | 5.6% |
 
 ### Allocation by Sector
 | Sector | # Investments | Capital | Share |
@@ -44,22 +42,6 @@ pie showData
     "Energy" : 0.3021
 ```
 Shows where exposure is concentrated by industry theme.
-
-### Allocation by Stage
-| Stage | # Investments | Capital | Share |
-|---|---|---|---|
-| Other | 3 | 7.19 | 56.5% |
-| Venture Capital | 3 | 2.94 | 23.1% |
-| Individual | 1 | 2.58 | 20.3% |
-
-```mermaid
-pie showData
-    title Stage Allocation
-    "Other" : 7.1868
-    "Venture Capital" : 2.9400
-    "Individual" : 2.5839
-```
-Checks whether deployment stays aligned with stage mandate.
 
 ### Allocation by Geography
 | Region | # Investments | Capital | Share |
@@ -109,9 +91,8 @@ Tracks deployment pace and vintage clustering.
 - Deployment pace is uneven; peak year is **2026**. Track whether new deals smooth vintage risk.
 
 ### Suggested Daily Follow-Ups
-- Compare every new deal against median ticket size before IC sign-off.
-- Maintain watchlist of top holdings and expected follow-on capital needs.
-- Update missing data fields weekly to keep dashboard decision-ready.
+- Compare each new deal against median ticket size before IC sign-off.
+- Keep top holdings and missing data fields on a weekly exception list.
 
 ## Rebuild
 
