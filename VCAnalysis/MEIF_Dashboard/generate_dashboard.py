@@ -11,6 +11,7 @@ import pandas as pd
 CSV_FILE = "MEIF West Midlands Equity Fund_investment.csv"
 DEAL_FILE = "Deal_Info_20260426.csv"
 README_FILE = "README.md"
+CLEANING_MEMO_FILE = "DATA_CLEANING_MEMO.md"
 CLEANED_COMPANY_FILE = "cleaned_company_investments.csv"
 CLEANED_DEAL_FILE = "cleaned_deal_info.csv"
 FILTERED_DEALS_FILE = "filtered_relevant_deals.csv"
@@ -210,6 +211,29 @@ def attach_company_info(relevant_deals: pd.DataFrame, company_df: pd.DataFrame) 
         if joined["companyname_company"].notna().any():
             return joined
 
+    if "dealid" in relevant_deals.columns:
+        deal_id_cols = [c for c in ["firstfinancingdealid", "lastfinancingdealid"] if c in company_df.columns]
+        if deal_id_cols:
+            company_deal_keys = (
+                company_df.melt(
+                    id_vars=[c for c in company_df.columns if c not in deal_id_cols],
+                    value_vars=deal_id_cols,
+                    value_name="_deal_join_id",
+                )
+                .dropna(subset=["_deal_join_id"])
+                .drop(columns=["variable"])
+                .drop_duplicates(subset=["_deal_join_id"])
+            )
+            joined = relevant_deals.merge(
+                company_deal_keys,
+                left_on="dealid",
+                right_on="_deal_join_id",
+                how="left",
+                suffixes=("_deal", "_company"),
+            )
+            if "companyname_company" in joined.columns and joined["companyname_company"].notna().any():
+                return joined
+
     if "companyname" in relevant_deals.columns and "companyname" in company_df.columns:
         left = relevant_deals.copy()
         right = company_df.copy()
@@ -245,6 +269,94 @@ def write_cleaned_datasets(
     return row_counts
 
 
+def workflow_diagram() -> str:
+    return "\n".join(
+        [
+            "```mermaid",
+            "flowchart LR",
+            "    A[Company-level investment file] --> C[Clean and standardise fields]",
+            "    B[Deal information file] --> C",
+            "    C --> D[Filter Future Planet Capital / Midven / MEIF deals]",
+            "    D --> E[Join filtered deals to company information]",
+            "    E --> F[Generate VC fund dashboard]",
+            "    F --> G[Update README]",
+            "```",
+        ]
+    )
+
+
+def cleaning_workflow_lines() -> list[str]:
+    return [
+        "## Data Cleaning & Filtering Workflow",
+        "",
+        "### Step 1: Load and standardise data",
+        "- Load the company-level investment file and deal information file.",
+        "- Standardise column names, company names, investor names, dates, and currency / deal-size fields.",
+        "- Output impact: both raw files become comparable, searchable, and ready for reliable grouping and joins.",
+        "",
+        "### Step 2: Filter relevant fund deals",
+        "- Use the deal information file to identify deals involving Future Planet Capital, Midven, Midlands Engine Investment Fund, MEIF, or related naming variations.",
+        "- Apply case-insensitive matching and remove irrelevant deals from other investors or funds.",
+        "- Output impact: the dashboard excludes the broader multi-fund company universe and reflects only fund-relevant activity.",
+        "",
+        "### Step 3: Join filtered deals to company information",
+        "- Join filtered deals back to the company-level data using the best available key: company ID first, then deal ID or cleaned company name where available.",
+        "- Keep only companies and investments linked to the filtered relevant deals.",
+        "- Output impact: all dashboard metrics are generated from the final filtered dataset only.",
+        "",
+        workflow_diagram(),
+        "",
+    ]
+
+
+def write_cleaning_memo(base_dir: Path, matched_cols: list[str], row_counts: dict[str, int]) -> None:
+    lines = [
+        "# Data Cleaning Memo",
+        "",
+        "This memo documents the procedure used by `generate_dashboard.py` to create the investor-facing dashboard and cleaned datasets.",
+        "",
+        "## Inputs",
+        f"- `{CSV_FILE}`: company-level investment and portfolio attributes.",
+        f"- `{DEAL_FILE}`: deal-level records used to identify fund-relevant investments.",
+        "",
+        "## Investor / Fund Filter",
+        "Deals are retained when investor, fund, participant, or deal synopsis text contains one of the following case-insensitive patterns:",
+    ]
+    lines.extend(f"- `{pattern}`" for pattern in TARGET_INVESTOR_PATTERNS)
+    lines.extend(
+        [
+            "",
+            f"Matched columns used in this run: {', '.join(matched_cols) if matched_cols else 'none detected'}.",
+            "",
+            "## Procedure",
+            "",
+        ]
+    )
+    lines.extend(cleaning_workflow_lines())
+    lines.extend(
+        [
+            "## Generated Outputs",
+            "",
+            md_table(
+                ["File", "Rows", "Description"],
+                [
+                    [f"`{CLEANED_COMPANY_FILE}`", str(row_counts[CLEANED_COMPANY_FILE]), "Standardised company-level dataset"],
+                    [f"`{CLEANED_DEAL_FILE}`", str(row_counts[CLEANED_DEAL_FILE]), "Standardised full deal-level dataset"],
+                    [f"`{FILTERED_DEALS_FILE}`", str(row_counts[FILTERED_DEALS_FILE]), "Filtered fund-relevant deals"],
+                    [f"`{FINAL_DATASET_FILE}`", str(row_counts[FINAL_DATASET_FILE]), "Final joined dataset used for README metrics"],
+                ],
+            ),
+            "",
+            "## Key Safeguards",
+            "- Metrics requiring unavailable columns are skipped rather than inferred.",
+            "- Missing deal sizes are excluded from capital-based metrics and reported as data-quality limitations.",
+            "- The final dashboard is based only on filtered deal records, not the full company-level file.",
+            "",
+        ]
+    )
+    (base_dir / CLEANING_MEMO_FILE).write_text("\n".join(lines), encoding="utf-8")
+
+
 def generate_readme(base_dir: Path, brief: bool = False) -> str:
     company_path = base_dir / CSV_FILE
     deal_path = base_dir / DEAL_FILE
@@ -259,6 +371,7 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
     relevant_deals, matched_cols = detect_relevant_deals(deal_df)
     joined = attach_company_info(relevant_deals, company_df)
     cleaned_output_counts = write_cleaned_datasets(base_dir, company_df, deal_df, relevant_deals, joined)
+    write_cleaning_memo(base_dir, matched_cols, cleaned_output_counts)
 
     amount_col = first_existing(joined, ["dealsize", "totalinvestedcapital", "nativeamountofdeal"])
     date_col = first_existing(joined, ["dealdate", "announceddate", "currentregistrationdate"])
@@ -366,64 +479,52 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
         missing_pct = (missing_n / total_deals * 100) if total_deals else 0.0
         missing_data_rows.append([label, f"{missing_n}/{total_deals} ({missing_pct:.1f}%)", "OK" if missing_n == 0 else "Partial"])
 
+    top_n = 3 if brief else 5
+    peak_year = int(yearly.loc[yearly["capital"].idxmax(), "year"]) if not yearly.empty else None
+
     lines: list[str] = []
-    lines.append("# MEIF Relevant Deals Dashboard")
+    lines.append("# MEIF Fund-Relevant VC Dashboard")
     lines.append("")
-    lines.append(
-        f"> Sources: `{CSV_FILE}` + `{DEAL_FILE}` | Filtered by investor names: Future Planet Capital / Midven / Midlands Engine Investment Fund (+ MEIF variations)"
-    )
-    lines.append("")
-    lines.append(
-        f"> Relevant filtered deals: **{total_deals}** (matched using columns: {', '.join(matched_cols) if matched_cols else 'none'})"
-    )
-    lines.append("")
-    lines.append("## Cleaned Data Outputs")
-    lines.append("")
-    lines.append("This dashboard also generates cleaned CSV files so the analysis can be reviewed or reused:")
-    lines.append("")
-    lines.append("- `cleaned_company_investments.csv`: standardized company-level investment file.")
-    lines.append("- `cleaned_deal_info.csv`: standardized full deal-level file before filtering.")
-    lines.append("- `filtered_relevant_deals.csv`: only deals linked to Future Planet Capital, Midven, Midlands Engine Investment Fund, or MEIF-related naming.")
-    lines.append("- `final_dashboard_dataset.csv`: final joined dataset used to calculate every dashboard metric below.")
+    lines.append("This dashboard focuses only on deals related to **Future Planet Capital**, **Midven**, and **Midlands Engine Investment Fund / MEIF**.")
+    lines.append(f"The original company-level file includes investments linked to multiple funds, so `{DEAL_FILE}` is used to filter fund-relevant transactions before any metrics are calculated.")
+    lines.append(f"All exposure, concentration, deployment, and data-quality views below are based on `{FINAL_DATASET_FILE}`.")
     lines.append("")
     lines.append("## Table of Contents")
     lines.append("")
-    lines.append("- [Cleaned Data Outputs](#cleaned-data-outputs)")
-    lines.append("- [1) Executive Fund Snapshot](#1-executive-fund-snapshot)")
-    lines.append("- [2) Capital Allocation Breakdown](#2-capital-allocation-breakdown)")
-    lines.append("- [3) Concentration and Risk Checks](#3-concentration-and-risk-checks)")
-    lines.append("- [4) Practical Management Insights](#4-practical-management-insights)")
-    lines.append("- [5) Data Quality and Coverage](#5-data-quality-and-coverage)")
-    lines.append("- [Rebuild](#rebuild)")
-    lines.append("- [Data Cleaning & Filtering Workflow (Audit Trail)](#data-cleaning--filtering-workflow-audit-trail)")
+    lines.append("- [Data Cleaning & Filtering Workflow](#data-cleaning--filtering-workflow)")
+    lines.append("- [Executive Snapshot](#executive-snapshot)")
+    lines.append("- [Fund Exposure](#fund-exposure)")
+    lines.append("- [Concentration Risk](#concentration-risk)")
+    lines.append("- [Deployment Pace](#deployment-pace)")
+    lines.append("- [Portfolio Health & Data Quality](#portfolio-health--data-quality)")
+    lines.append("- [Generated Files](#generated-files)")
     lines.append("")
-    lines.append("## 1) Executive Fund Snapshot")
+    lines.extend(cleaning_workflow_lines())
+
+    lines.append("## Executive Snapshot")
     lines.append("")
     lines.append(
         md_table(
             ["Metric", "Value"],
             [
-                ["Total relevant deals", str(total_deals)],
-                ["Total invested capital", fmt_num(total_capital) if amount_col else "N/A"],
-                ["Number of portfolio companies", str(unique_companies)],
+                ["Relevant deals", str(total_deals)],
+                ["Portfolio companies", str(unique_companies)],
+                ["Total tracked capital", fmt_num(total_capital) if amount_col else "N/A"],
                 ["Average deal size", fmt_num(avg_ticket) if amount_col else "N/A"],
                 ["Median deal size", fmt_num(med_ticket) if amount_col else "N/A"],
-                ["Largest investment", f"{largest_name} ({fmt_num(largest_amount)})"],
-                ["Most recent investment", f"{recent_name} ({recent_date})" if date_col else "N/A"],
+                ["Largest deal", f"{largest_name} ({fmt_num(largest_amount)})"],
+                ["Most recent deal", f"{recent_name} ({recent_date})" if date_col else "N/A"],
             ],
         )
     )
     lines.append("")
-    lines.append("Focus: only deal activity tied to target investors/funds for day-to-day monitoring.")
-    lines.append("")
 
-    lines.append("## 2) Capital Allocation Breakdown")
+    lines.append("## Fund Exposure")
     lines.append("")
-    lines.append("### Top Companies by Invested Amount")
-    top_n = 3 if brief else 5
+    lines.append("### Top Portfolio Companies")
     lines.append(
         md_table(
-            ["Company", "Capital", "Share of Total"],
+            ["Company", "Tracked Capital", "Share of Total"],
             [
                 [row[company_col], fmt_num(row["capital"]), f"{row['share_pct']:.1f}%"]
                 for _, row in top_companies.head(top_n).iterrows()
@@ -434,230 +535,126 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
     lines.append("")
 
     if not sector_breakdown.empty:
-        lines.append("### Allocation by Sector")
+        lines.append("### Sector Exposure")
         lines.append(
             md_table(
-                ["Sector", "# Investments", "Capital", "Share"],
-                [
-                    [r["bucket"], str(int(r["investments"])), fmt_num(r["capital"]), f"{r['share_pct']:.1f}%"]
-                    for _, r in sector_breakdown.iterrows()
-                ],
+                ["Sector", "# Deals", "Capital", "Share"],
+                [[r["bucket"], str(int(r["investments"])), fmt_num(r["capital"]), f"{r['share_pct']:.1f}%"] for _, r in sector_breakdown.iterrows()],
             )
         )
         lines.append("")
-        lines.append(mermaid_pie("Sector Allocation", sector_breakdown))
-        lines.append("Shows where exposure is concentrated by industry theme.")
+        lines.append(mermaid_pie("Sector Exposure", sector_breakdown))
         lines.append("")
 
-    if not brief and not stage_breakdown.empty:
-        lines.append("### Allocation by Stage")
+    if not stage_breakdown.empty and not brief:
+        lines.append("### Stage Exposure")
         lines.append(
             md_table(
-                ["Stage", "# Investments", "Capital", "Share"],
-                [
-                    [r["bucket"], str(int(r["investments"])), fmt_num(r["capital"]), f"{r['share_pct']:.1f}%"]
-                    for _, r in stage_breakdown.iterrows()
-                ],
+                ["Stage", "# Deals", "Capital", "Share"],
+                [[r["bucket"], str(int(r["investments"])), fmt_num(r["capital"]), f"{r['share_pct']:.1f}%"] for _, r in stage_breakdown.iterrows()],
             )
         )
-        lines.append("")
-        lines.append(mermaid_pie("Stage Allocation", stage_breakdown))
-        lines.append("Checks whether deployment stays aligned with stage mandate.")
         lines.append("")
 
     if not geo_breakdown.empty:
-        lines.append("### Allocation by Geography")
+        lines.append("### Geography Exposure")
         lines.append(
             md_table(
-                ["Region", "# Investments", "Capital", "Share"],
-                [
-                    [r["bucket"], str(int(r["investments"])), fmt_num(r["capital"]), f"{r['share_pct']:.1f}%"]
-                    for _, r in geo_breakdown.iterrows()
-                ],
+                ["Region", "# Deals", "Capital", "Share"],
+                [[r["bucket"], str(int(r["investments"])), fmt_num(r["capital"]), f"{r['share_pct']:.1f}%"] for _, r in geo_breakdown.iterrows()],
             )
         )
         lines.append("")
-        lines.append(mermaid_pie("Geography Allocation", geo_breakdown))
-        lines.append("Highlights location concentration and sourcing breadth.")
-        lines.append("")
 
+    lines.append("## Concentration Risk")
+    lines.append("")
+    lines.append(
+        md_table(
+            ["Risk Check", "Result", "Management Read"],
+            [
+                [
+                    "Top 5 company concentration",
+                    f"{top5_share:.1f}%" if top5_share is not None else "N/A",
+                    "High if this remains above 75%",
+                ],
+                [
+                    "Largest sector exposure",
+                    f"{largest_sector['bucket']} ({largest_sector['share_pct']:.1f}%)" if largest_sector is not None else "N/A",
+                    "Monitor sector caps and pipeline balance",
+                ],
+                [
+                    "Largest geography exposure",
+                    f"{largest_geo['bucket']} ({largest_geo['share_pct']:.1f}%)" if largest_geo is not None else "N/A",
+                    "Check sourcing breadth within mandate",
+                ],
+                [
+                    "Unusually large deals",
+                    ", ".join(f"{r[company_col]} ({fmt_num(r[amount_col])})" for _, r in unusually_large[[company_col, amount_col]].iterrows())
+                    or "None flagged / insufficient data",
+                    "Review any outliers before follow-on decisions",
+                ],
+            ],
+        )
+    )
+    lines.append("")
+
+    lines.append("## Deployment Pace")
+    lines.append("")
     if not yearly.empty:
-        lines.append("### Allocation by Year")
         lines.append(
             md_table(
                 ["Year", "# Deals", "Capital"],
-                [
-                    [str(int(r["year"])), str(int(r["deals"])), fmt_num(r["capital"])]
-                    for _, r in yearly.iterrows()
-                ],
+                [[str(int(r["year"])), str(int(r["deals"])), fmt_num(r["capital"])] for _, r in yearly.iterrows()],
             )
         )
         lines.append("")
         lines.append(mermaid_bar_year(yearly, amount_col))
-        lines.append("Tracks deployment pace and vintage clustering.")
         lines.append("")
+        lines.append(f"Peak tracked deployment year: **{peak_year}**." if peak_year else "Deployment timing could not be assessed.")
+    else:
+        lines.append("Deployment timing could not be assessed because usable deal-date data was unavailable.")
+    lines.append("")
 
-    if not coinvestors.empty:
-        lines.append("### Top Co-Investors (in filtered deals)")
+    lines.append("## Portfolio Health & Data Quality")
+    lines.append("")
+    insights: list[str] = []
+    if top5_share is not None and top5_share >= 75:
+        insights.append(f"- Capital is concentrated: top 5 companies represent **{top5_share:.1f}%** of tracked capital.")
+    if largest_sector is not None:
+        insights.append(f"- Sector exposure is led by **{largest_sector['bucket']}** at **{largest_sector['share_pct']:.1f}%**.")
+    if largest_geo is not None:
+        insights.append(f"- Geography exposure is led by **{largest_geo['bucket']}** at **{largest_geo['share_pct']:.1f}%**.")
+    if amount_col and int(joined[amount_col].isna().sum()) > 0:
+        insights.append("- Missing deal sizes limit full capital-weighted assessment; treat capital totals as tracked disclosed capital.")
+    if coinvestors.empty:
+        insights.append("- Co-investor visibility is partial because investor-name fields are sparse and synopsis parsing is incomplete.")
+    lines.extend(insights or ["- No major portfolio health exceptions were identified from available fields."])
+    lines.append("")
+    lines.append(md_table(["Data Field", "Missing", "Status"], missing_data_rows))
+    lines.append("")
+
+    if not coinvestors.empty and not brief:
+        lines.append("### Visible Co-Investors")
         rows = [[name, int(cnt)] for name, cnt in coinvestors.head(8).items()]
         lines.append(md_table(["Co-investor", "# Deals"], rows))
         lines.append("")
 
-    lines.append("## 3) Concentration and Risk Checks")
-    lines.append("")
-    risk_rows = [
-        ["Top 5 companies as % of total capital", f"{top5_share:.1f}%" if top5_share is not None else "N/A"],
-        [
-            "Largest sector exposure",
-            f"{largest_sector['bucket']} ({largest_sector['share_pct']:.1f}%)" if largest_sector is not None else "N/A",
-        ],
-        [
-            "Largest geography exposure",
-            f"{largest_geo['bucket']} ({largest_geo['share_pct']:.1f}%)" if largest_geo is not None else "N/A",
-        ],
-        [
-            "Unusually large deals (IQR rule)",
-            ", ".join(
-                f"{r[company_col]} ({fmt_num(r[amount_col])})" for _, r in unusually_large[[company_col, amount_col]].iterrows()
-            )
-            or "None flagged / insufficient data",
-        ],
-    ]
-    lines.append(md_table(["Check", "Result"], risk_rows))
-    lines.append("")
-
-    lines.append("## 4) Practical Management Insights")
-    lines.append("")
-    insights: list[str] = []
-    if top5_share is not None and top5_share >= 75:
-        insights.append(
-            f"- Capital concentration is high: top 5 companies represent **{top5_share:.1f}%** of tracked capital."
-        )
-    if largest_sector is not None and largest_sector["share_pct"] >= 50:
-        insights.append(
-            f"- Sector exposure is skewed to **{largest_sector['bucket']}** at **{largest_sector['share_pct']:.1f}%**."
-        )
-    if largest_geo is not None and largest_geo["share_pct"] >= 70:
-        insights.append(
-            f"- Geographic exposure is concentrated in **{largest_geo['bucket']}** ({largest_geo['share_pct']:.1f}%)."
-        )
-    if amount_col and int(joined[amount_col].isna().sum()) > 0:
-        insights.append("- Some filtered deals have missing deal size; this reduces capital-based comparability.")
-    if date_col and not yearly.empty and len(yearly) > 1:
-        peak_year = int(yearly.loc[yearly["capital"].idxmax(), "year"])
-        insights.append(f"- Deployment is concentrated by vintage; peak year is **{peak_year}**.")
-    if coinvestors.empty:
-        insights.append("- Co-investor ranking is limited because investor-name columns are sparse; synopsis parsing only gives partial coverage.")
-    if not insights:
-        insights.append("- Current allocation looks balanced on available fields; continue monitoring new deals against concentration thresholds.")
-
-    lines.extend(insights)
-    lines.append("")
-    lines.append("### Suggested Daily Follow-Ups")
-    if brief:
-        lines.extend(
-            [
-                "- Compare each new deal against median ticket size before IC sign-off.",
-                "- Keep top holdings and missing data fields on a weekly exception list.",
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                "- Compare every new deal against median ticket size before IC sign-off.",
-                "- Maintain watchlist of top holdings and expected follow-on capital needs.",
-                "- Update missing data fields weekly to keep dashboard decision-ready.",
-            ]
-        )
-    lines.append("")
-    lines.append("## 5) Data Quality and Coverage")
-    lines.append("")
-    lines.append(md_table(["Field", "Missing", "Status"], missing_data_rows))
-    lines.append("")
-    lines.append("## 6) Generated Cleaned Datasets")
+    lines.append("## Generated Files")
     lines.append("")
     lines.append(
         md_table(
-            ["Output file", "Rows", "Purpose"],
+            ["File", "Rows", "What it is"],
             [
-                [
-                    f"`{CLEANED_COMPANY_FILE}`",
-                    str(cleaned_output_counts[CLEANED_COMPANY_FILE]),
-                    "Standardized company-level investment dataset",
-                ],
-                [
-                    f"`{CLEANED_DEAL_FILE}`",
-                    str(cleaned_output_counts[CLEANED_DEAL_FILE]),
-                    "Standardized deal-level dataset before filtering",
-                ],
-                [
-                    f"`{FILTERED_DEALS_FILE}`",
-                    str(cleaned_output_counts[FILTERED_DEALS_FILE]),
-                    "Relevant MEIF / Midven / Future Planet Capital deals after filtering",
-                ],
-                [
-                    f"`{FINAL_DATASET_FILE}`",
-                    str(cleaned_output_counts[FINAL_DATASET_FILE]),
-                    "Final joined analytics dataset used for dashboard metrics",
-                ],
+                [f"`{CLEANED_COMPANY_FILE}`", str(cleaned_output_counts[CLEANED_COMPANY_FILE]), "Cleaned company-level investment data"],
+                [f"`{CLEANED_DEAL_FILE}`", str(cleaned_output_counts[CLEANED_DEAL_FILE]), "Cleaned deal-level data before filtering"],
+                [f"`{FILTERED_DEALS_FILE}`", str(cleaned_output_counts[FILTERED_DEALS_FILE]), "Filtered fund-relevant deal records"],
+                [f"`{FINAL_DATASET_FILE}`", str(cleaned_output_counts[FINAL_DATASET_FILE]), "Final analytics dataset used by this dashboard"],
+                [f"`{CLEANING_MEMO_FILE}`", "1 memo", "Detailed data-cleaning and filtering documentation"],
             ],
         )
     )
     lines.append("")
-    lines.append("## Rebuild")
-    lines.append("")
-    lines.append("Run `python generate_dashboard.py` for full dashboard, or `python generate_dashboard.py --brief` for one-page mode.")
-    lines.append("")
-    lines.append("## Data Cleaning & Filtering Workflow (Audit Trail)")
-    lines.append("")
-    lines.append("### Step 1: Load and standardise both datasets")
-    lines.append(
-        md_table(
-            ["Step 1 Item", "Details"],
-            [
-                ["Input", f"`{CSV_FILE}` and `{DEAL_FILE}` raw CSV exports"],
-                ["Processing", "Standardize headers to lowercase `snake_case`; trim text; normalize key text fields (company, investor/fund, sector, stage, geography); parse date and deal-size fields with safe coercion"],
-                ["Output", "Schema-consistent company-level and deal-level dataframes ready for filtering and join"],
-                ["Impact on metrics", "Prevents casing/spacing mismatches and reduces parsing errors in date, amount, and grouping calculations"],
-            ],
-        )
-    )
-    lines.append("")
-    lines.append("### Step 2: Identify relevant MEIF-related deals")
-    lines.append(
-        md_table(
-            ["Step 2 Item", "Details"],
-            [
-                ["Input", "Standardized deal-level dataframe"],
-                ["Processing", "Case-insensitive keyword matching across investor/fund-related text fields for `Future Planet Capital`, `Midven`, `Midlands Engine Investment Fund`, plus `MEIF` / `Midlands Engine` variations; drop non-matching rows; deduplicate repeated deal records where applicable"],
-                ["Output", "Filtered relevant-deals dataframe containing only target-fund-linked transactions"],
-                ["Impact on metrics", "Ensures all dashboard KPIs exclude unrelated investors/funds and reflect MEIF-relevant activity only"],
-            ],
-        )
-    )
-    lines.append("")
-    lines.append("### Step 3: Join filtered deals to company-level information")
-    lines.append(
-        md_table(
-            ["Step 3 Item", "Details"],
-            [
-                ["Input", "Filtered relevant-deals dataframe + standardized company-level dataframe"],
-                ["Processing", "Join keys applied in priority order: `companyid` (preferred), then fallback to cleaned company-name matching when IDs are unavailable"],
-                ["Output", "Final analytics dataset used for all summary metrics, breakdowns, concentration checks, and insights"],
-                ["Impact on metrics", "Links deal activity to sector/stage/geography/company attributes and prevents leakage from unfiltered company universe"],
-            ],
-        )
-    )
-    lines.append("")
-    lines.append("```mermaid")
-    lines.append("flowchart LR")
-    lines.append("    A[Load company-level investment file] --> C[Standardise and clean fields]")
-    lines.append("    B[Load deal information file] --> C")
-    lines.append("    C --> D[Filter for Future Planet Capital / Midven / MEIF deals]")
-    lines.append("    D --> E[Join filtered deals to company-level data]")
-    lines.append("    E --> F[Generate investor dashboard metrics]")
-    lines.append("    F --> G[Update README dashboard]")
-    lines.append("```")
+    lines.append("Run `python generate_dashboard.py` to regenerate the README, cleaned datasets, and cleaning memo.")
     lines.append("")
 
     return "\n".join(lines)

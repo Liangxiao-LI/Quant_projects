@@ -1,47 +1,62 @@
-# MEIF Relevant Deals Dashboard
+# MEIF Fund-Relevant VC Dashboard
 
-> Sources: `MEIF West Midlands Equity Fund_investment.csv` + `Deal_Info_20260426.csv` | Filtered by investor names: Future Planet Capital / Midven / Midlands Engine Investment Fund (+ MEIF variations)
-
-> Relevant filtered deals: **12** (matched using columns: dealsynopsis, investors, newinvestors, followoninvestors)
-
-## Cleaned Data Outputs
-
-This dashboard also generates cleaned CSV files so the analysis can be reviewed or reused:
-
-- `cleaned_company_investments.csv`: standardized company-level investment file.
-- `cleaned_deal_info.csv`: standardized full deal-level file before filtering.
-- `filtered_relevant_deals.csv`: only deals linked to Future Planet Capital, Midven, Midlands Engine Investment Fund, or MEIF-related naming.
-- `final_dashboard_dataset.csv`: final joined dataset used to calculate every dashboard metric below.
+This dashboard focuses only on deals related to **Future Planet Capital**, **Midven**, and **Midlands Engine Investment Fund / MEIF**.
+The original company-level file includes investments linked to multiple funds, so `Deal_Info_20260426.csv` is used to filter fund-relevant transactions before any metrics are calculated.
+All exposure, concentration, deployment, and data-quality views below are based on `final_dashboard_dataset.csv`.
 
 ## Table of Contents
 
-- [Cleaned Data Outputs](#cleaned-data-outputs)
-- [1) Executive Fund Snapshot](#1-executive-fund-snapshot)
-- [2) Capital Allocation Breakdown](#2-capital-allocation-breakdown)
-- [3) Concentration and Risk Checks](#3-concentration-and-risk-checks)
-- [4) Practical Management Insights](#4-practical-management-insights)
-- [5) Data Quality and Coverage](#5-data-quality-and-coverage)
-- [Rebuild](#rebuild)
-- [Data Cleaning & Filtering Workflow (Audit Trail)](#data-cleaning--filtering-workflow-audit-trail)
+- [Data Cleaning & Filtering Workflow](#data-cleaning--filtering-workflow)
+- [Executive Snapshot](#executive-snapshot)
+- [Fund Exposure](#fund-exposure)
+- [Concentration Risk](#concentration-risk)
+- [Deployment Pace](#deployment-pace)
+- [Portfolio Health & Data Quality](#portfolio-health--data-quality)
+- [Generated Files](#generated-files)
 
-## 1) Executive Fund Snapshot
+## Data Cleaning & Filtering Workflow
+
+### Step 1: Load and standardise data
+- Load the company-level investment file and deal information file.
+- Standardise column names, company names, investor names, dates, and currency / deal-size fields.
+- Output impact: both raw files become comparable, searchable, and ready for reliable grouping and joins.
+
+### Step 2: Filter relevant fund deals
+- Use the deal information file to identify deals involving Future Planet Capital, Midven, Midlands Engine Investment Fund, MEIF, or related naming variations.
+- Apply case-insensitive matching and remove irrelevant deals from other investors or funds.
+- Output impact: the dashboard excludes the broader multi-fund company universe and reflects only fund-relevant activity.
+
+### Step 3: Join filtered deals to company information
+- Join filtered deals back to the company-level data using the best available key: company ID first, then deal ID or cleaned company name where available.
+- Keep only companies and investments linked to the filtered relevant deals.
+- Output impact: all dashboard metrics are generated from the final filtered dataset only.
+
+```mermaid
+flowchart LR
+    A[Company-level investment file] --> C[Clean and standardise fields]
+    B[Deal information file] --> C
+    C --> D[Filter Future Planet Capital / Midven / MEIF deals]
+    D --> E[Join filtered deals to company information]
+    E --> F[Generate VC fund dashboard]
+    F --> G[Update README]
+```
+
+## Executive Snapshot
 
 | Metric | Value |
 |---|---|
-| Total relevant deals | 12 |
-| Total invested capital | 8.88 |
-| Number of portfolio companies | 8 |
+| Relevant deals | 12 |
+| Portfolio companies | 8 |
+| Total tracked capital | 8.88 |
 | Average deal size | 0.99 |
 | Median deal size | 0.71 |
-| Largest investment | IDenteq (1.95) |
-| Most recent investment | CyberQ Group (2026-03-01) |
+| Largest deal | IDenteq (1.95) |
+| Most recent deal | CyberQ Group (2026-03-01) |
 
-Focus: only deal activity tied to target investors/funds for day-to-day monitoring.
+## Fund Exposure
 
-## 2) Capital Allocation Breakdown
-
-### Top Companies by Invested Amount
-| Company | Capital | Share of Total |
+### Top Portfolio Companies
+| Company | Tracked Capital | Share of Total |
 |---|---|---|
 | iEthico | 2.36 | 26.6% |
 | IDenteq | 1.95 | 22.0% |
@@ -49,8 +64,8 @@ Focus: only deal activity tied to target investors/funds for day-to-day monitori
 | CyberQ Group | 1.26 | 14.2% |
 | Birtelli's | 0.68 | 7.7% |
 
-### Allocation by Sector
-| Sector | # Investments | Capital | Share |
+### Sector Exposure
+| Sector | # Deals | Capital | Share |
 |---|---|---|---|
 | Healthcare | 3 | 4.21 | 47.4% |
 | Information Technology | 3 | 3.69 | 41.5% |
@@ -59,39 +74,34 @@ Focus: only deal activity tied to target investors/funds for day-to-day monitori
 
 ```mermaid
 pie showData
-    title Sector Allocation
+    title Sector Exposure
     "Healthcare" : 4.2083
     "Information Technology" : 3.6911
     "Consumer Products and Services (B2C)" : 0.6833
     "Energy" : 0.3021
 ```
-Shows where exposure is concentrated by industry theme.
 
-### Allocation by Stage
-| Stage | # Investments | Capital | Share |
+### Stage Exposure
+| Stage | # Deals | Capital | Share |
 |---|---|---|---|
 | Venture Capital | 9 | 8.88 | 100.0% |
 
-```mermaid
-pie showData
-    title Stage Allocation
-    "Venture Capital" : 8.8848
-```
-Checks whether deployment stays aligned with stage mandate.
-
-### Allocation by Geography
-| Region | # Investments | Capital | Share |
+### Geography Exposure
+| Region | # Deals | Capital | Share |
 |---|---|---|---|
 | England | 9 | 8.88 | 100.0% |
 
-```mermaid
-pie showData
-    title Geography Allocation
-    "England" : 8.8848
-```
-Highlights location concentration and sourcing breadth.
+## Concentration Risk
 
-### Allocation by Year
+| Risk Check | Result | Management Read |
+|---|---|---|
+| Top 5 company concentration | 91.3% | High if this remains above 75% |
+| Largest sector exposure | Healthcare (47.4%) | Monitor sector caps and pipeline balance |
+| Largest geography exposure | England (100.0%) | Check sourcing breadth within mandate |
+| Unusually large deals | None flagged / insufficient data | Review any outliers before follow-on decisions |
+
+## Deployment Pace
+
 | Year | # Deals | Capital |
 |---|---|---|
 | 2020 | 2 | 0.67 |
@@ -108,37 +118,17 @@ xychart-beta
     y-axis "Capital (dealsize)" 0 --> 3.35
     bar [0.6694, 0.7877, 0.7132, 1.8486, 2.9112, 1.9546]
 ```
-Tracks deployment pace and vintage clustering.
 
-### Top Co-Investors (in filtered deals)
-| Co-investor | # Deals |
-|---|---|
-| Uk Innovation & Science Seed Fund | 3 |
+Peak tracked deployment year: **2024**.
 
-## 3) Concentration and Risk Checks
+## Portfolio Health & Data Quality
 
-| Check | Result |
-|---|---|
-| Top 5 companies as % of total capital | 91.3% |
-| Largest sector exposure | Healthcare (47.4%) |
-| Largest geography exposure | England (100.0%) |
-| Unusually large deals (IQR rule) | None flagged / insufficient data |
+- Capital is concentrated: top 5 companies represent **91.3%** of tracked capital.
+- Sector exposure is led by **Healthcare** at **47.4%**.
+- Geography exposure is led by **England** at **100.0%**.
+- Missing deal sizes limit full capital-weighted assessment; treat capital totals as tracked disclosed capital.
 
-## 4) Practical Management Insights
-
-- Capital concentration is high: top 5 companies represent **91.3%** of tracked capital.
-- Geographic exposure is concentrated in **England** (100.0%).
-- Some filtered deals have missing deal size; this reduces capital-based comparability.
-- Deployment is concentrated by vintage; peak year is **2024**.
-
-### Suggested Daily Follow-Ups
-- Compare every new deal against median ticket size before IC sign-off.
-- Maintain watchlist of top holdings and expected follow-on capital needs.
-- Update missing data fields weekly to keep dashboard decision-ready.
-
-## 5) Data Quality and Coverage
-
-| Field | Missing | Status |
+| Data Field | Missing | Status |
 |---|---|---|
 | Deal size | 3/12 (25.0%) | Partial |
 | Deal date | 0/12 (0.0%) | OK |
@@ -147,51 +137,19 @@ Tracks deployment pace and vintage clustering.
 | Geography | 0/12 (0.0%) | OK |
 | Deal ID | 0/12 (0.0%) | OK |
 
-## 6) Generated Cleaned Datasets
+### Visible Co-Investors
+| Co-investor | # Deals |
+|---|---|
+| Uk Innovation & Science Seed Fund | 3 |
 
-| Output file | Rows | Purpose |
+## Generated Files
+
+| File | Rows | What it is |
 |---|---|---|
-| `cleaned_company_investments.csv` | 8 | Standardized company-level investment dataset |
-| `cleaned_deal_info.csv` | 41 | Standardized deal-level dataset before filtering |
-| `filtered_relevant_deals.csv` | 12 | Relevant MEIF / Midven / Future Planet Capital deals after filtering |
-| `final_dashboard_dataset.csv` | 12 | Final joined analytics dataset used for dashboard metrics |
+| `cleaned_company_investments.csv` | 8 | Cleaned company-level investment data |
+| `cleaned_deal_info.csv` | 41 | Cleaned deal-level data before filtering |
+| `filtered_relevant_deals.csv` | 12 | Filtered fund-relevant deal records |
+| `final_dashboard_dataset.csv` | 12 | Final analytics dataset used by this dashboard |
+| `DATA_CLEANING_MEMO.md` | 1 memo | Detailed data-cleaning and filtering documentation |
 
-## Rebuild
-
-Run `python generate_dashboard.py` for full dashboard, or `python generate_dashboard.py --brief` for one-page mode.
-
-## Data Cleaning & Filtering Workflow (Audit Trail)
-
-### Step 1: Load and standardise both datasets
-| Step 1 Item | Details |
-|---|---|
-| Input | `MEIF West Midlands Equity Fund_investment.csv` and `Deal_Info_20260426.csv` raw CSV exports |
-| Processing | Standardize headers to lowercase `snake_case`; trim text; normalize key text fields (company, investor/fund, sector, stage, geography); parse date and deal-size fields with safe coercion |
-| Output | Schema-consistent company-level and deal-level dataframes ready for filtering and join |
-| Impact on metrics | Prevents casing/spacing mismatches and reduces parsing errors in date, amount, and grouping calculations |
-
-### Step 2: Identify relevant MEIF-related deals
-| Step 2 Item | Details |
-|---|---|
-| Input | Standardized deal-level dataframe |
-| Processing | Case-insensitive keyword matching across investor/fund-related text fields for `Future Planet Capital`, `Midven`, `Midlands Engine Investment Fund`, plus `MEIF` / `Midlands Engine` variations; drop non-matching rows; deduplicate repeated deal records where applicable |
-| Output | Filtered relevant-deals dataframe containing only target-fund-linked transactions |
-| Impact on metrics | Ensures all dashboard KPIs exclude unrelated investors/funds and reflect MEIF-relevant activity only |
-
-### Step 3: Join filtered deals to company-level information
-| Step 3 Item | Details |
-|---|---|
-| Input | Filtered relevant-deals dataframe + standardized company-level dataframe |
-| Processing | Join keys applied in priority order: `companyid` (preferred), then fallback to cleaned company-name matching when IDs are unavailable |
-| Output | Final analytics dataset used for all summary metrics, breakdowns, concentration checks, and insights |
-| Impact on metrics | Links deal activity to sector/stage/geography/company attributes and prevents leakage from unfiltered company universe |
-
-```mermaid
-flowchart LR
-    A[Load company-level investment file] --> C[Standardise and clean fields]
-    B[Load deal information file] --> C
-    C --> D[Filter for Future Planet Capital / Midven / MEIF deals]
-    D --> E[Join filtered deals to company-level data]
-    E --> F[Generate investor dashboard metrics]
-    F --> G[Update README dashboard]
-```
+Run `python generate_dashboard.py` to regenerate the README, cleaned datasets, and cleaning memo.
