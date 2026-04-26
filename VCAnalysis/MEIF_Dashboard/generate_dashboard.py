@@ -491,15 +491,14 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
     lines.append("")
     lines.append("## Table of Contents")
     lines.append("")
-    lines.append("- [Data Cleaning & Filtering Workflow](#data-cleaning--filtering-workflow)")
     lines.append("- [Executive Snapshot](#executive-snapshot)")
     lines.append("- [Fund Exposure](#fund-exposure)")
     lines.append("- [Concentration Risk](#concentration-risk)")
     lines.append("- [Deployment Pace](#deployment-pace)")
     lines.append("- [Portfolio Health & Data Quality](#portfolio-health--data-quality)")
     lines.append("- [Generated Files](#generated-files)")
+    lines.append("- [Data Cleaning & Filtering Workflow](#data-cleaning--filtering-workflow)")
     lines.append("")
-    lines.extend(cleaning_workflow_lines())
 
     lines.append("## Executive Snapshot")
     lines.append("")
@@ -656,6 +655,7 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
     lines.append("")
     lines.append("Run `python generate_dashboard.py` to regenerate the README, cleaned datasets, and cleaning memo.")
     lines.append("")
+    lines.extend(cleaning_workflow_lines())
 
     return "\n".join(lines)
 

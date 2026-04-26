@@ -6,40 +6,13 @@ All exposure, concentration, deployment, and data-quality views below are based 
 
 ## Table of Contents
 
-- [Data Cleaning & Filtering Workflow](#data-cleaning--filtering-workflow)
 - [Executive Snapshot](#executive-snapshot)
 - [Fund Exposure](#fund-exposure)
 - [Concentration Risk](#concentration-risk)
 - [Deployment Pace](#deployment-pace)
 - [Portfolio Health & Data Quality](#portfolio-health--data-quality)
 - [Generated Files](#generated-files)
-
-## Data Cleaning & Filtering Workflow
-
-### Step 1: Load and standardise data
-- Load the company-level investment file and deal information file.
-- Standardise column names, company names, investor names, dates, and currency / deal-size fields.
-- Output impact: both raw files become comparable, searchable, and ready for reliable grouping and joins.
-
-### Step 2: Filter relevant fund deals
-- Use the deal information file to identify deals involving Future Planet Capital, Midven, Midlands Engine Investment Fund, MEIF, or related naming variations.
-- Apply case-insensitive matching and remove irrelevant deals from other investors or funds.
-- Output impact: the dashboard excludes the broader multi-fund company universe and reflects only fund-relevant activity.
-
-### Step 3: Join filtered deals to company information
-- Join filtered deals back to the company-level data using the best available key: company ID first, then deal ID or cleaned company name where available.
-- Keep only companies and investments linked to the filtered relevant deals.
-- Output impact: all dashboard metrics are generated from the final filtered dataset only.
-
-```mermaid
-flowchart LR
-    A[Company-level investment file] --> C[Clean and standardise fields]
-    B[Deal information file] --> C
-    C --> D[Filter Future Planet Capital / Midven / MEIF deals]
-    D --> E[Join filtered deals to company information]
-    E --> F[Generate VC fund dashboard]
-    F --> G[Update README]
-```
+- [Data Cleaning & Filtering Workflow](#data-cleaning--filtering-workflow)
 
 ## Executive Snapshot
 
@@ -153,3 +126,30 @@ Peak tracked deployment year: **2024**.
 | `DATA_CLEANING_MEMO.md` | 1 memo | Detailed data-cleaning and filtering documentation |
 
 Run `python generate_dashboard.py` to regenerate the README, cleaned datasets, and cleaning memo.
+
+## Data Cleaning & Filtering Workflow
+
+### Step 1: Load and standardise data
+- Load the company-level investment file and deal information file.
+- Standardise column names, company names, investor names, dates, and currency / deal-size fields.
+- Output impact: both raw files become comparable, searchable, and ready for reliable grouping and joins.
+
+### Step 2: Filter relevant fund deals
+- Use the deal information file to identify deals involving Future Planet Capital, Midven, Midlands Engine Investment Fund, MEIF, or related naming variations.
+- Apply case-insensitive matching and remove irrelevant deals from other investors or funds.
+- Output impact: the dashboard excludes the broader multi-fund company universe and reflects only fund-relevant activity.
+
+### Step 3: Join filtered deals to company information
+- Join filtered deals back to the company-level data using the best available key: company ID first, then deal ID or cleaned company name where available.
+- Keep only companies and investments linked to the filtered relevant deals.
+- Output impact: all dashboard metrics are generated from the final filtered dataset only.
+
+```mermaid
+flowchart LR
+    A[Company-level investment file] --> C[Clean and standardise fields]
+    B[Deal information file] --> C
+    C --> D[Filter Future Planet Capital / Midven / MEIF deals]
+    D --> E[Join filtered deals to company information]
+    E --> F[Generate VC fund dashboard]
+    F --> G[Update README]
+```
