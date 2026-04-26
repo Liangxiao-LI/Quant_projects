@@ -4,8 +4,18 @@
 
 > Relevant filtered deals: **12** (matched using columns: dealsynopsis, investors, newinvestors, followoninvestors)
 
+## Cleaned Data Outputs
+
+This dashboard also generates cleaned CSV files so the analysis can be reviewed or reused:
+
+- `cleaned_company_investments.csv`: standardized company-level investment file.
+- `cleaned_deal_info.csv`: standardized full deal-level file before filtering.
+- `filtered_relevant_deals.csv`: only deals linked to Future Planet Capital, Midven, Midlands Engine Investment Fund, or MEIF-related naming.
+- `final_dashboard_dataset.csv`: final joined dataset used to calculate every dashboard metric below.
+
 ## Table of Contents
 
+- [Cleaned Data Outputs](#cleaned-data-outputs)
 - [1) Executive Fund Snapshot](#1-executive-fund-snapshot)
 - [2) Capital Allocation Breakdown](#2-capital-allocation-breakdown)
 - [3) Concentration and Risk Checks](#3-concentration-and-risk-checks)
@@ -136,6 +146,15 @@ Tracks deployment pace and vintage clustering.
 | Stage | 0/12 (0.0%) | OK |
 | Geography | 0/12 (0.0%) | OK |
 | Deal ID | 0/12 (0.0%) | OK |
+
+## 6) Generated Cleaned Datasets
+
+| Output file | Rows | Purpose |
+|---|---|---|
+| `cleaned_company_investments.csv` | 8 | Standardized company-level investment dataset |
+| `cleaned_deal_info.csv` | 41 | Standardized deal-level dataset before filtering |
+| `filtered_relevant_deals.csv` | 12 | Relevant MEIF / Midven / Future Planet Capital deals after filtering |
+| `final_dashboard_dataset.csv` | 12 | Final joined analytics dataset used for dashboard metrics |
 
 ## Rebuild
 

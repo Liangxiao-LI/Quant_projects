@@ -11,6 +11,10 @@ import pandas as pd
 CSV_FILE = "MEIF West Midlands Equity Fund_investment.csv"
 DEAL_FILE = "Deal_Info_20260426.csv"
 README_FILE = "README.md"
+CLEANED_COMPANY_FILE = "cleaned_company_investments.csv"
+CLEANED_DEAL_FILE = "cleaned_deal_info.csv"
+FILTERED_DEALS_FILE = "filtered_relevant_deals.csv"
+FINAL_DATASET_FILE = "final_dashboard_dataset.csv"
 TARGET_INVESTOR_PATTERNS = [
     "future planet capital",
     "midven",
@@ -181,7 +185,14 @@ def detect_relevant_deals(deals: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]
     mask = pd.Series(False, index=deals.index)
     for pat in TARGET_INVESTOR_PATTERNS:
         mask |= combined_text.str.contains(re.escape(pat), regex=True)
-    return deals.loc[mask].copy(), candidate_text_cols
+    filtered = deals.loc[mask].copy()
+    if "dealid" in filtered.columns:
+        filtered = filtered.drop_duplicates(subset=["dealid"])
+    elif {"companyid", "dealdate", "dealsynopsis"}.issubset(filtered.columns):
+        filtered = filtered.drop_duplicates(subset=["companyid", "dealdate", "dealsynopsis"])
+    else:
+        filtered = filtered.drop_duplicates()
+    return filtered, candidate_text_cols
 
 
 def attach_company_info(relevant_deals: pd.DataFrame, company_df: pd.DataFrame) -> pd.DataFrame:
@@ -210,6 +221,30 @@ def attach_company_info(relevant_deals: pd.DataFrame, company_df: pd.DataFrame) 
     return relevant_deals.copy()
 
 
+def write_cleaned_datasets(
+    base_dir: Path,
+    company_df: pd.DataFrame,
+    deal_df: pd.DataFrame,
+    relevant_deals: pd.DataFrame,
+    final_dataset: pd.DataFrame,
+) -> dict[str, int]:
+    """
+    Export each cleaned layer so the dashboard can be audited or reused.
+    The final dataset is the exact joined table used for all dashboard metrics.
+    """
+    outputs = {
+        CLEANED_COMPANY_FILE: company_df,
+        CLEANED_DEAL_FILE: deal_df,
+        FILTERED_DEALS_FILE: relevant_deals,
+        FINAL_DATASET_FILE: final_dataset,
+    }
+    row_counts: dict[str, int] = {}
+    for filename, data in outputs.items():
+        data.to_csv(base_dir / filename, index=False)
+        row_counts[filename] = len(data)
+    return row_counts
+
+
 def generate_readme(base_dir: Path, brief: bool = False) -> str:
     company_path = base_dir / CSV_FILE
     deal_path = base_dir / DEAL_FILE
@@ -223,6 +258,7 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
 
     relevant_deals, matched_cols = detect_relevant_deals(deal_df)
     joined = attach_company_info(relevant_deals, company_df)
+    cleaned_output_counts = write_cleaned_datasets(base_dir, company_df, deal_df, relevant_deals, joined)
 
     amount_col = first_existing(joined, ["dealsize", "totalinvestedcapital", "nativeamountofdeal"])
     date_col = first_existing(joined, ["dealdate", "announceddate", "currentregistrationdate"])
@@ -341,8 +377,18 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
         f"> Relevant filtered deals: **{total_deals}** (matched using columns: {', '.join(matched_cols) if matched_cols else 'none'})"
     )
     lines.append("")
+    lines.append("## Cleaned Data Outputs")
+    lines.append("")
+    lines.append("This dashboard also generates cleaned CSV files so the analysis can be reviewed or reused:")
+    lines.append("")
+    lines.append("- `cleaned_company_investments.csv`: standardized company-level investment file.")
+    lines.append("- `cleaned_deal_info.csv`: standardized full deal-level file before filtering.")
+    lines.append("- `filtered_relevant_deals.csv`: only deals linked to Future Planet Capital, Midven, Midlands Engine Investment Fund, or MEIF-related naming.")
+    lines.append("- `final_dashboard_dataset.csv`: final joined dataset used to calculate every dashboard metric below.")
+    lines.append("")
     lines.append("## Table of Contents")
     lines.append("")
+    lines.append("- [Cleaned Data Outputs](#cleaned-data-outputs)")
     lines.append("- [1) Executive Fund Snapshot](#1-executive-fund-snapshot)")
     lines.append("- [2) Capital Allocation Breakdown](#2-capital-allocation-breakdown)")
     lines.append("- [3) Concentration and Risk Checks](#3-concentration-and-risk-checks)")
@@ -527,6 +573,36 @@ def generate_readme(base_dir: Path, brief: bool = False) -> str:
     lines.append("## 5) Data Quality and Coverage")
     lines.append("")
     lines.append(md_table(["Field", "Missing", "Status"], missing_data_rows))
+    lines.append("")
+    lines.append("## 6) Generated Cleaned Datasets")
+    lines.append("")
+    lines.append(
+        md_table(
+            ["Output file", "Rows", "Purpose"],
+            [
+                [
+                    f"`{CLEANED_COMPANY_FILE}`",
+                    str(cleaned_output_counts[CLEANED_COMPANY_FILE]),
+                    "Standardized company-level investment dataset",
+                ],
+                [
+                    f"`{CLEANED_DEAL_FILE}`",
+                    str(cleaned_output_counts[CLEANED_DEAL_FILE]),
+                    "Standardized deal-level dataset before filtering",
+                ],
+                [
+                    f"`{FILTERED_DEALS_FILE}`",
+                    str(cleaned_output_counts[FILTERED_DEALS_FILE]),
+                    "Relevant MEIF / Midven / Future Planet Capital deals after filtering",
+                ],
+                [
+                    f"`{FINAL_DATASET_FILE}`",
+                    str(cleaned_output_counts[FINAL_DATASET_FILE]),
+                    "Final joined analytics dataset used for dashboard metrics",
+                ],
+            ],
+        )
+    )
     lines.append("")
     lines.append("## Rebuild")
     lines.append("")
