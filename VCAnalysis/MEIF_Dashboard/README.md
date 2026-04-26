@@ -127,6 +127,16 @@ Tracks deployment pace and vintage clustering.
 | Geography | 0/12 (0.0%) | OK |
 | Deal ID | 0/12 (0.0%) | OK |
 
+## 6) Data Cleaning Process
+
+- **Column normalization:** standardized both CSV headers to lowercase `snake_case` to prevent casing/spacing mismatches.
+- **Text normalization:** normalized company names and investor text for case-insensitive matching and fallback joins.
+- **Investor/fund filtering:** scanned investor-related text fields and `dealsynopsis` using keyword patterns (`Future Planet Capital`, `Midven`, `Midlands Engine Investment Fund`, `MEIF`, `Midlands Engine`).
+- **Type coercion:** converted deal amount columns to numeric and date columns to datetime with safe coercion (`errors="coerce"`).
+- **Join logic:** merged filtered deal-level rows to company-level attributes using `companyid` first, then normalized `companyname` fallback.
+- **Missing-value handling:** excluded null amounts from capital-based metrics; tracked missingness for key fields in the data-quality table.
+- **Metric safeguards:** skipped unavailable metrics gracefully and marked them in the README instead of failing generation.
+
 - Filtering logic uses case-insensitive pattern matching over investor/fund-related text fields.
 - Join logic prefers `companyid`; if unavailable, falls back to normalized company name.
 - Metrics requiring unavailable columns are skipped and documented above.
