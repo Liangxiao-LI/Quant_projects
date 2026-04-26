@@ -1,0 +1,11 @@
+{
+  "original_rows": 670787,
+  "original_funds": 162671,
+  "rows_after_cleaning": 379636,
+  "funds_after_cleaning": 13989,
+  "rows_removed": 291151,
+  "funds_removed": 148682,
+  "row_retention_pct": 56.6,
+  "fund_retention_pct": 8.6,
+  "min_valid_periods_threshold": 4
+}
