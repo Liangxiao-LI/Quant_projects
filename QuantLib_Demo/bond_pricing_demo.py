@@ -10,7 +10,7 @@ def price_fixed_rate_bond() -> dict[str, float]:
     ql.Settings.instance().evaluationDate = settlement_date
 
     # Bond and market assumptions.
-    # Amounts are quoted per 100 face value, which is standard for bond pricing.
+    # Amounts are quoted per 100 face value, which is standard for bond pricing. etc
     face_value = 100.0
     coupon_rate = 0.045
     market_yield = 0.04
