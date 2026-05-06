@@ -455,10 +455,10 @@ for col in sorted(p_full.output.columns):
 # SAVE OUTPUTS
 # ─────────────────────────────────────────────────────────────────────────────
 section("Saving outputs")
-p_auto.output.to_csv("cleaned_auto.csv",        index=False)
-p_full.output.to_csv("cleaned_full_manual.csv", index=False)
-print("  cleaned_auto.csv          → auto mode output")
-print("  cleaned_full_manual.csv   → full manual pipeline output")
+p_auto.output.to_csv("autoclean_outputs/cleaned_auto.csv",        index=False)
+p_full.output.to_csv("autoclean_outputs/cleaned_full_manual.csv", index=False)
+print("  autoclean_outputs/cleaned_auto.csv          → auto mode output")
+print("  autoclean_outputs/cleaned_full_manual.csv   → full manual pipeline output")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SUMMARY TABLE

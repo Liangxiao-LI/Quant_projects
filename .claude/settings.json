@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/opt/anaconda3/envs/myenv/bin/python --version)",
+      "Bash(/opt/anaconda3/envs/myenv/bin/pip show *)",
+      "Bash(/opt/anaconda3/envs/myenv/bin/pip install *)",
+      "Bash(/opt/anaconda3/envs/myenv/bin/python -c \"import pandas_profiling; print\\(pandas_profiling.__version__\\)\")",
+      "Bash(/opt/anaconda3/envs/myenv/bin/python pandas_profiling_demo.py)",
+      "Bash(/opt/anaconda3/envs/myenv/bin/python -c ' *)"
+    ]
+  }
+}
